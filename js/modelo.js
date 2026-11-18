@@ -6,9 +6,14 @@ import { uid, hoy, diasEntre, redondear, enmascararTarjetas } from './util.js';
 
 export const VERSION_DATOS = 2;
 
-export const AMBITOS = ['personal', 'empresa', 'estudio', 'afiliados', 'cursos'];
+export const AMBITOS = ['personal', 'empresa', 'estudio', 'afiliados', 'cursos', 'desarrollo de empresa y negocios', 'formación y desarrollo personal'];
 export const MONEDAS = ['USD', 'USDT', 'MXN', 'EUR', 'CUP'];
-export const TIPOS_503020 = ['necesidad', 'deseo', 'ahorro', 'no aplica'];
+// Tipo de cada gasto en el presupuesto (20-30-30-20 desde el 18 nov 2026). «necesidad» = necesidad personal.
+export const TIPOS_503020 = ['necesidad', 'desarrollo de negocios', 'deseo', 'ahorro', 'no aplica'];
+export const NOMBRES_TIPO = { necesidad: 'necesidad personal', 'desarrollo de negocios': 'desarrollo de negocios', deseo: 'deseo', ahorro: 'ahorro', 'no aplica': 'no aplica' };
+// Para qué se destina cada ingreso. Cada parte del reparto lleva uno de estos destinos (u «otros» con texto).
+export const DESTINOS = ['necesidades personales', 'desarrollo de negocios', 'desarrollo personal', 'pagado a mí', 'compra y venta', 'deseos', 'ahorro', 'meta', 'otros'];
+export const MEDIOS_HORMIGA = ['efectivo', 'transferencia', 'deuda'];
 export const CATEGORIAS = [
   'Vivienda', 'Comida', 'Transporte', 'Servicios', 'Suscripción', 'Salud', 'Ropa', 'Ocio',
   'Formación', 'Inversiones', 'Compra', 'Envíos', 'Trabajo / proyecto', 'Comisiones', 'Regalos', 'Otros',
@@ -18,7 +23,13 @@ export const COLECCIONES = [
   'cuentas', 'movimientos', 'suscripciones', 'facturas', 'paquetes',
   'tasasBancus', 'tasasToque', 'tasasEUR', 'personales', 'notas',
   'ahorros', 'metas', 'deudas', 'inversiones', 'activosPasivos', 'ajustes',
+  'articulos', 'hormigas', 'gastosNegocio',
 ];
+
+export const TIPOS_GASTO_NEGOCIO = ['formación', 'curso', 'anuncio o promoción pagada', 'herramienta o suscripción', 'otros'];
+export const TIPOS_ANUNCIO = ['Instagram', 'Facebook', 'TikTok', 'Google', 'YouTube', 'WhatsApp', 'otro'];
+
+export const CATEGORIAS_EXTRA = ['Formación personal', 'Formación para negocios', 'Pagado a mí', 'Gasto hormiga', 'Compra para revender'];
 
 // Campos de cada colección: formularios, validación al importar y Excel.
 export const CAMPOS = {
@@ -27,7 +38,8 @@ export const CAMPOS = {
     { k: 'moneda', l: 'Moneda', t: 'select', op: MONEDAS, req: true },
     { k: 'saldoInicial', l: 'Saldo inicial', t: 'number' },
     { k: 'ultimos4', l: 'Últimos 4 dígitos de la tarjeta (solo 4)', t: 'text', max: 4, patron: '^\\d{0,4}$' },
-    { k: 'convertirConBancus', l: 'Convertir a USD con la tasa de Bancus', t: 'checkbox' },
+    { k: 'convertirConBancus', l: 'Convertir a USD con la tasa de Bancus (solo cuentas en MXN)', t: 'checkbox' },
+    { k: 'guardaAhorro', l: 'En esta cuenta guardo el ahorro y el dinero de las metas (avisa si gasto de más)', t: 'checkbox' },
     { k: 'nota', l: 'Nota', t: 'textarea' },
   ],
   movimientos: [
@@ -35,15 +47,19 @@ export const CAMPOS = {
     { k: 'hora', l: 'Hora', t: 'time' },
     { k: 'cuenta', l: 'Cuenta', t: 'cuenta', req: true },
     { k: 'tipo', l: 'Tipo', t: 'select', op: ['salida', 'entrada'], req: true },
-    { k: 'monto', l: 'Monto (en la moneda de la cuenta)', t: 'number', req: true, min: 0 },
-    { k: 'moneda', l: 'Moneda', t: 'select', op: MONEDAS, req: true },
+    { k: 'monto', l: 'Monto', t: 'number', req: true, min: 0 },
+    { k: 'moneda', l: 'Moneda del movimiento', t: 'select', op: MONEDAS, req: true, ayuda: 'La moneda en que entró o salió el dinero. Una cuenta puede tener varias (p. ej. efectivo en CUP y en $).' },
     { k: 'tasa', l: 'Tasa del día (unidades por 1 $)', t: 'number', min: 0, ayuda: 'MXN: tasa del panel de Bancus. CUP: El Toque. EUR: euros por 1 $. Se congela: no se recalcula después.' },
     { k: 'interno', l: 'Movimiento interno entre cuentas propias (no cuenta como gasto ni ingreso)', t: 'checkbox' },
+    { k: 'retencion', l: 'Retención de Bancus (se anula sola: no cuenta como gasto ni ingreso)', t: 'checkbox' },
     { k: 'descripcion', l: 'Descripción', t: 'text', req: true },
-    { k: 'categoria', l: 'Categoría', t: 'text', sug: CATEGORIAS },
-    { k: 'tipo503020', l: 'Tipo 50-30-20 (solo gastos)', t: 'select', op: TIPOS_503020, ayuda: 'Necesidad = imprescindible. Deseo = prescindible. Ahorro = dinero que apartas.' },
+    { k: 'categoria', l: 'Categoría', t: 'text', sug: [...CATEGORIAS, ...CATEGORIAS_EXTRA] },
+    { k: 'subcategoria', l: 'Detalle (qué tipo: p. ej. curso de inglés, software, sueldo)', t: 'text' },
+    { k: 'tipo503020', l: 'Tipo de gasto en el presupuesto (solo salidas)', t: 'select', op: TIPOS_503020, etq: NOMBRES_TIPO, ayuda: 'Necesidad personal = imprescindible para ti. Desarrollo de negocios = inversión en el negocio. Deseo = prescindible. Ahorro = dinero que apartas.' },
+    { k: 'reparto', l: 'Para qué va este ingreso (solo entradas)', t: 'reparto' },
     { k: 'ambito', l: 'Ámbito', t: 'select', op: AMBITOS },
     { k: 'deuda', l: 'Pago de una deuda', t: 'deuda' },
+    { k: 'p2p', l: 'Estos CUP pagaron la compra P2P', t: 'p2p', ayuda: 'Si esta salida de CUP pagó una compra P2P de QvaPay, elígela aquí.' },
     { k: 'montoBruto', l: 'P2P: $ comprados (bruto, antes de comisión)', t: 'number', min: 0 },
     { k: 'cupPagados', l: 'P2P: CUP pagados', t: 'number', min: 0 },
     { k: 'vendedor', l: 'P2P: vendedor', t: 'text' },
@@ -61,7 +77,7 @@ export const CAMPOS = {
     { k: 'proximoCobro', l: 'Próximo cobro', t: 'date' },
     { k: 'avisoDias', l: 'Avisar con cuántos días', t: 'number', min: 0 },
     { k: 'estado', l: 'Estado', t: 'select', op: ['activa', 'pendiente', 'pausada', 'cancelada'] },
-    { k: 'tipo503020', l: 'Tipo 50-30-20', t: 'select', op: TIPOS_503020 },
+    { k: 'tipo503020', l: 'Tipo de gasto en el presupuesto', t: 'select', op: TIPOS_503020, etq: NOMBRES_TIPO },
     { k: 'ambito', l: 'Ámbito', t: 'select', op: AMBITOS },
     { k: 'cuenta', l: 'Se cobra en', t: 'cuenta' },
     { k: 'verificado', l: 'Verificado', t: 'checkbox' },
@@ -171,8 +187,58 @@ export const CAMPOS = {
     { k: 'moneda', l: 'Moneda', t: 'select', op: MONEDAS, req: true },
     { k: 'nota', l: 'Nota', t: 'textarea' },
   ],
+  articulos: [
+    { k: 'nombre', l: 'Artículo', t: 'text', req: true },
+    { k: 'cantidad', l: 'Cantidad', t: 'number', min: 0 },
+    { k: 'fechaCompra', l: 'Fecha de compra', t: 'date', req: true },
+    { k: 'tienda', l: 'Dónde se compró (tienda o proveedor)', t: 'text' },
+    { k: 'costo', l: 'Costo de compra', t: 'number', req: true, min: 0 },
+    { k: 'moneda', l: 'Moneda', t: 'select', op: MONEDAS, req: true },
+    { k: 'movimientoCompra', l: 'Pago de la compra (movimiento de salida)', t: 'movimiento' },
+    { k: 'peso', l: 'Peso (libras) que indica el taquillero de Panavana', t: 'number', min: 0 },
+    { k: 'costoEnvio', l: 'Costo del envío que indica Panavana ($)', t: 'number', min: 0 },
+    { k: 'montoFacturaPanavana', l: 'Monto final de la factura de Panavana ($)', t: 'number', min: 0, ayuda: 'Debe coincidir con la factura de Panavana registrada en Facturas cuando llegue.' },
+    { k: 'facturaPanavana', l: 'Factura de Panavana registrada', t: 'factura' },
+    { k: 'cliente', l: 'Cliente', t: 'text' },
+    { k: 'precioVenta', l: 'Precio de venta (total)', t: 'number', min: 0 },
+    { k: 'anticipo', l: 'Anticipo', t: 'number', min: 0 },
+    { k: 'anticipoPone', l: 'Quién pone el anticipo', t: 'select', op: ['cliente', 'yo'] },
+    { k: 'cobrado', l: 'Cobrado al cliente además del anticipo', t: 'number', min: 0 },
+    { k: 'fechaVenta', l: 'Fecha de venta', t: 'date' },
+    { k: 'estado', l: 'Estado', t: 'select', op: ['en stock', 'vendido', 'parcialmente vendido'] },
+    { k: 'movimientoVenta', l: 'Cobro de la venta (movimiento de entrada)', t: 'entrada' },
+    { k: 'ambito', l: 'Ámbito', t: 'select', op: AMBITOS },
+    { k: 'nota', l: 'Nota', t: 'textarea' },
+  ],
+  hormigas: [
+    { k: 'fecha', l: 'Fecha', t: 'date', req: true },
+    { k: 'concepto', l: 'Concepto (café, transporte, merienda…)', t: 'text', req: true },
+    { k: 'monto', l: 'Importe', t: 'number', req: true, min: 0 },
+    { k: 'moneda', l: 'Moneda', t: 'select', op: MONEDAS, req: true },
+    { k: 'tasa', l: 'Tasa del día (unidades por 1 $)', t: 'number', min: 0 },
+    { k: 'medio', l: 'Cómo lo pagaste', t: 'select', op: MEDIOS_HORMIGA, req: true, ayuda: 'Efectivo o transferencia: sale de la cuenta que elijas. Deuda: se apunta sola en Deudas.' },
+    { k: 'cuenta', l: 'Cuenta (si pagaste en efectivo o transferencia)', t: 'cuenta' },
+    { k: 'acreedor', l: 'A quién le debes (si te endeudaste)', t: 'text' },
+    { k: 'fechaPagoDeuda', l: 'Cuándo piensas pagar la deuda', t: 'date' },
+    { k: 'ambito', l: 'Ámbito', t: 'select', op: AMBITOS },
+    { k: 'nota', l: 'Nota', t: 'textarea' },
+  ],
+  gastosNegocio: [
+    { k: 'fecha', l: 'Fecha', t: 'date', req: true },
+    { k: 'negocio', l: 'Negocio', t: 'text', req: true, sug: ['Afiliados Insenia', 'Philocalia Studio', 'Philocalia Group', 'Cursos'], ayuda: 'Para qué negocio es este gasto.' },
+    { k: 'tipoGasto', l: 'Tipo de gasto', t: 'select', op: TIPOS_GASTO_NEGOCIO, req: true },
+    { k: 'tipoAnuncio', l: 'Tipo de anuncio (si es anuncio o promoción)', t: 'text', sug: TIPOS_ANUNCIO },
+    { k: 'concepto', l: 'Concepto (qué curso, qué campaña…)', t: 'text', req: true },
+    { k: 'monto', l: 'Gasto', t: 'number', req: true, min: 0 },
+    { k: 'moneda', l: 'Moneda', t: 'select', op: MONEDAS, req: true },
+    { k: 'tasa', l: 'Tasa del día (unidades por 1 $)', t: 'number', min: 0 },
+    { k: 'cuenta', l: 'Pagado desde la cuenta', t: 'cuenta', req: true },
+    { k: 'ambito', l: 'Ámbito', t: 'select', op: AMBITOS },
+    { k: 'nota', l: 'Nota', t: 'textarea' },
+  ],
   ajustes: [
-    { k: 'pctNecesidades', l: 'Presupuesto: % necesidades', t: 'number', min: 0 },
+    { k: 'pctNecesidades', l: 'Presupuesto: % necesidades personales', t: 'number', min: 0 },
+    { k: 'pctNegocio', l: 'Presupuesto: % desarrollo de negocios', t: 'number', min: 0 },
     { k: 'pctDeseos', l: 'Presupuesto: % deseos', t: 'number', min: 0 },
     { k: 'pctAhorro', l: 'Presupuesto: % ahorro', t: 'number', min: 0 },
     { k: 'metaAhorroMensual', l: 'Meta de ahorro de cada mes ($)', t: 'number', min: 0 },
@@ -180,7 +246,7 @@ export const CAMPOS = {
   ],
 };
 
-export const AJUSTES_POR_DEFECTO = { id: 'ajustes', pctNecesidades: 50, pctDeseos: 30, pctAhorro: 20, metaAhorroMensual: null, fondoEmergenciaMeses: 6 };
+export const AJUSTES_POR_DEFECTO = { id: 'ajustes', pctNecesidades: 20, pctNegocio: 30, pctDeseos: 30, pctAhorro: 20, metaAhorroMensual: null, fondoEmergenciaMeses: 6 };
 
 export function nuevoEstado() {
   const e = { version: VERSION_DATOS };
@@ -193,7 +259,16 @@ export function sello(registro, dispositivo, ahora = Date.now()) {
 }
 
 export const vivos = (lista) => (lista || []).filter((r) => !r.borrado);
-export const ajustes = (estado) => ({ ...AJUSTES_POR_DEFECTO, ...(vivos(estado.ajustes).find((a) => a.id === 'ajustes') || {}) });
+export function ajustes(estado) {
+  const guardados = vivos(estado.ajustes).find((a) => a.id === 'ajustes') || {};
+  const r = { ...AJUSTES_POR_DEFECTO };
+  for (const [k, v] of Object.entries(guardados)) if (v !== null && v !== undefined && v !== '') r[k] = v;
+  // Ajustes de antes del 18 nov 2026 (50-30-20, sin casilla de negocio): pasan al reparto nuevo 20-30-30-20.
+  if (guardados.pctNegocio === null || guardados.pctNegocio === undefined || guardados.pctNegocio === '') {
+    Object.assign(r, { pctNecesidades: 20, pctNegocio: 30, pctDeseos: 30, pctAhorro: 20 });
+  }
+  return r;
+}
 
 // --- Tasas ------------------------------------------------------------------------------
 
@@ -218,14 +293,11 @@ export function ultimaTasa(tabla) {
 
 const TABLA_DE = { MXN: 'tasasBancus', CUP: 'tasasToque', EUR: 'tasasEUR' };
 
-/** Tasa sugerida para congelar en un movimiento (MXN solo con tasa exacta del día). */
+/** Tasa sugerida para congelar en un movimiento: la del día o, si falta, la verificada más cercana (exacta: false). */
 export function tasaSugerida(estado, moneda, fecha) {
   const tabla = TABLA_DE[moneda];
   if (!tabla) return null;
-  const t = tasaPara(estado[tabla], fecha);
-  if (!t) return null;
-  if (moneda === 'MXN' && !t.exacta) return null;
-  return t;
+  return tasaPara(estado[tabla], fecha);
 }
 
 /** Equivalente en USD. USD y USDT valen 1:1. Otras monedas necesitan tasa (unidades por 1 $). */
@@ -254,20 +326,27 @@ export const signo = (m) => (m.tipo === 'entrada' ? 1 : -1);
 
 // --- Saldos -----------------------------------------------------------------------------
 
+/**
+ * Saldo de cada cuenta, separado por moneda: disponible = saldo inicial + entradas − salidas en cada moneda.
+ * Una cuenta puede tener varias monedas (p. ej. efectivo en CUP y en $): cada una se convierte a $ con su tasa.
+ */
 export function saldos(estado) {
-  const tasaHoy = ultimaTasa(estado.tasasBancus);
   return vivos(estado.cuentas).map((c) => {
     const movs = vivos(estado.movimientos).filter((m) => m.cuenta === c.id);
-    const saldo = redondear(movs.reduce((s, m) => s + signo(m) * Number(m.monto || 0), Number(c.saldoInicial || 0)));
-    let usd = aUSD(saldo, c.moneda, null);
-    let tasa = null;
-    if (usd === null && c.moneda === 'MXN' && c.convertirConBancus && tasaHoy) {
-      usd = aUSD(saldo, 'MXN', tasaHoy.valor);
-      tasa = tasaHoy;
-    } else if (usd === null) {
-      usd = aUSDHoy(estado, saldo, c.moneda);
+    const porMoneda = { [c.moneda]: Number(c.saldoInicial || 0) };
+    for (const m of movs) {
+      const mon = m.moneda || c.moneda;
+      porMoneda[mon] = (porMoneda[mon] || 0) + signo(m) * Number(m.monto || 0);
     }
-    return { cuenta: c, saldo, usd, tasa, movimientos: movs.length };
+    const monedas = Object.entries(porMoneda).map(([moneda, s]) => {
+      const saldoM = redondear(s);
+      const t = TABLA_DE[moneda] ? ultimaTasa(estado[TABLA_DE[moneda]]) : null;
+      return { moneda, saldo: saldoM, usd: aUSDHoy(estado, saldoM, moneda), tasa: t };
+    }).filter((x) => x.moneda === c.moneda || Math.abs(x.saldo) >= 0.005);
+    const principal = monedas.find((x) => x.moneda === c.moneda);
+    const sinTasa = monedas.filter((x) => x.usd === null && x.saldo !== 0).map((x) => x.moneda);
+    const usd = monedas.every((x) => x.usd === null) && monedas.some((x) => x.saldo !== 0) ? null : redondear(monedas.reduce((a, x) => a + (x.usd || 0), 0));
+    return { cuenta: c, saldo: principal.saldo, usd, tasa: principal.tasa, monedas, sinTasa, movimientos: movs.length };
   });
 }
 
@@ -326,72 +405,169 @@ export function resumenPorAmbito(estado, desde, hasta) {
   return r;
 }
 
-/** Totales de un mes (AAAA-MM) en USD, sin movimientos internos. */
+/** De dólares a otra moneda con la última tasa conocida (para metas en EUR, CUP o MXN). */
+export function desdeUSD(estado, usd, moneda) {
+  if (usd === null || usd === undefined) return null;
+  if (moneda === 'USD' || moneda === 'USDT') return redondear(usd);
+  const t = TABLA_DE[moneda] ? ultimaTasa(estado[TABLA_DE[moneda]]) : null;
+  return t ? redondear(usd * t.valor) : null;
+}
+
+/** Partes del reparto de un ingreso, cada una con su importe en la moneda del movimiento y en $. */
+export function repartoMovimiento(m) {
+  if (m.tipo !== 'entrada' || !Array.isArray(m.reparto) || !m.reparto.length) return [];
+  const total = Number(m.monto || 0);
+  return m.reparto.map((p) => {
+    const monto = Number(p.monto) > 0 ? Number(p.monto) : Number(p.pct) > 0 ? redondear((total * Number(p.pct)) / 100) : 0;
+    return { ...p, montoMoneda: monto, usd: aUSD(monto, m.moneda, m.tasa) };
+  }).filter((p) => p.montoMoneda > 0);
+}
+
+/** Ids de los movimientos unidos a compras y ventas de reventa (no cuentan como gasto ni ingreso normal). */
+function idsReventa(estado) {
+  const s = new Set();
+  for (const a of vivos(estado.articulos)) {
+    if (a.movimientoCompra) s.add(a.movimientoCompra);
+    if (a.movimientoVenta) s.add(a.movimientoVenta);
+  }
+  return s;
+}
+
+/** Cuenta para el mes solo lo real: ni traspasos internos ni retenciones de Bancus. */
+const cuentaEnMes = (m) => !m.interno && !m.retencion;
+
+/** Totales de un mes (AAAA-MM) en USD, sin movimientos internos ni retenciones. */
 export function mes(estado, mesTxt) {
-  const r = { ingresos: 0, gastos: 0, porTipo: { necesidad: 0, deseo: 0, ahorro: 0, 'no aplica': 0, 'sin clasificar': 0 }, porCategoria: {}, sinConvertir: 0, sinClasificar: [] };
+  const r = {
+    ingresos: 0, gastos: 0, gananciaReventa: 0, hormigaDeuda: 0,
+    porTipo: { necesidad: 0, 'desarrollo de negocios': 0, deseo: 0, ahorro: 0, 'no aplica': 0, 'sin clasificar': 0 },
+    porCategoria: {}, detalle: {}, porDestino: {}, sinConvertir: 0, sinClasificar: [],
+  };
+  const reventa = idsReventa(estado);
+  const sumarDetalle = (tipo, cat, sub, usd) => {
+    r.detalle[tipo] ||= {};
+    r.detalle[tipo][cat] ||= { total: 0, sub: {} };
+    r.detalle[tipo][cat].total += usd;
+    if (sub) r.detalle[tipo][cat].sub[sub] = (r.detalle[tipo][cat].sub[sub] || 0) + usd;
+  };
   for (const m of vivos(estado.movimientos)) {
-    if (m.interno || String(m.fecha).slice(0, 7) !== mesTxt) continue;
+    if (!cuentaEnMes(m) || String(m.fecha).slice(0, 7) !== mesTxt || reventa.has(m.id)) continue;
+    if (String(m.deuda || '').startsWith('hd-')) continue; // pago de un gasto hormiga a crédito: ya contó al hacerlo
     const usd = usdMovimiento(m);
     if (usd === null) { r.sinConvertir++; continue; }
+    const cat = m.categoria || 'Sin categoría';
     if (m.tipo === 'entrada' && esDevolucion(m)) {
       // Una devolución no es un ingreso: resta del gasto que anula.
+      const t = m.tipo503020 || 'sin clasificar';
       r.gastos -= usd;
-      r.porTipo[m.tipo503020 || 'sin clasificar'] -= usd;
-      const cat = m.categoria || 'Sin categoría';
+      r.porTipo[t] = (r.porTipo[t] || 0) - usd;
       r.porCategoria[cat] = (r.porCategoria[cat] || 0) - usd;
+      sumarDetalle(t, cat, m.subcategoria, -usd);
       continue;
     }
-    if (m.tipo === 'entrada') { r.ingresos += usd; continue; }
+    if (m.tipo === 'entrada') {
+      r.ingresos += usd;
+      for (const p of repartoMovimiento(m)) {
+        const k = p.destino === 'otros' ? (p.texto || 'otros') : p.destino;
+        r.porDestino[k] = (r.porDestino[k] || 0) + (p.usd || 0);
+      }
+      continue;
+    }
     r.gastos += usd;
     const t = m.tipo503020 || 'sin clasificar';
-    r.porTipo[t] += usd;
+    r.porTipo[t] = (r.porTipo[t] || 0) + usd;
     if (!m.tipo503020) r.sinClasificar.push(m);
-    const cat = m.categoria || 'Sin categoría';
     r.porCategoria[cat] = (r.porCategoria[cat] || 0) + usd;
+    sumarDetalle(t, cat, m.subcategoria, usd);
   }
+  // Gastos hormiga pagados a crédito: son gasto del mes en que se hacen (la deuda se paga después).
+  for (const g of vivos(estado.hormigas)) {
+    if (g.medio !== 'deuda' || String(g.fecha).slice(0, 7) !== mesTxt) continue;
+    const usd = aUSD(g.monto, g.moneda, g.tasa) ?? aUSDHoy(estado, g.monto, g.moneda);
+    if (usd === null) { r.sinConvertir++; continue; }
+    r.gastos += usd;
+    r.hormigaDeuda += usd;
+    r.porTipo.deseo += usd;
+    r.porCategoria['Gasto hormiga'] = (r.porCategoria['Gasto hormiga'] || 0) + usd;
+    sumarDetalle('deseo', 'Gasto hormiga', `${g.concepto} (a crédito)`, usd);
+  }
+  // La ganancia de lo que se revende entra como ingreso el mes de la venta.
+  for (const a of vivos(estado.articulos)) {
+    const e = estadoArticulo(estado, a);
+    if (!e.vendido || String(a.fechaVenta || '').slice(0, 7) !== mesTxt || e.gananciaUSD === null) continue;
+    r.ingresos += e.gananciaUSD;
+    r.gananciaReventa += e.gananciaUSD;
+  }
+  const red = (o) => { for (const k of Object.keys(o)) o[k] = redondear(o[k]); };
   r.ingresos = redondear(r.ingresos);
   r.gastos = redondear(r.gastos);
-  for (const k of Object.keys(r.porTipo)) r.porTipo[k] = redondear(r.porTipo[k]);
-  for (const k of Object.keys(r.porCategoria)) r.porCategoria[k] = redondear(r.porCategoria[k]);
+  r.gananciaReventa = redondear(r.gananciaReventa);
+  r.hormigaDeuda = redondear(r.hormigaDeuda);
+  red(r.porTipo); red(r.porCategoria); red(r.porDestino);
+  for (const t of Object.values(r.detalle)) for (const c of Object.values(t)) { c.total = redondear(c.total); red(c.sub); }
   return r;
 }
 
 // --- Ahorro, metas, deudas, inversiones y patrimonio ------------------------------------------
 
-export function ahorroMes(estado, mesTxt) {
-  let total = 0;
+/** Lo que se aparta para ahorro o metas: aportes de Ahorro + partes «ahorro»/«meta» del reparto de los ingresos. */
+function apartados(estado) {
+  const lista = [];
   for (const a of vivos(estado.ahorros)) {
-    if (String(a.fecha).slice(0, 7) !== mesTxt) continue;
-    total += (a.tipo === 'retiro' ? -1 : 1) * (aUSDHoy(estado, a.monto, a.moneda) || 0);
+    const usd = aUSDHoy(estado, a.monto, a.moneda) || 0;
+    lista.push({ fecha: a.fecha, destino: a.destino || 'ahorro', meta: a.meta || null, usd: a.tipo === 'retiro' ? -usd : usd, monto: Number(a.monto || 0) * (a.tipo === 'retiro' ? -1 : 1), moneda: a.moneda });
   }
-  return redondear(total);
+  for (const m of vivos(estado.movimientos)) {
+    if (m.interno || m.retencion) continue;
+    for (const p of repartoMovimiento(m)) {
+      if (p.destino !== 'ahorro' && p.destino !== 'meta') continue;
+      lista.push({ fecha: m.fecha, destino: p.destino, meta: p.meta || null, usd: p.usd || 0, monto: p.montoMoneda, moneda: m.moneda, desdeIngreso: true });
+    }
+  }
+  return lista;
 }
 
-/** Presupuesto 50-30-20 de un mes. */
+export function ahorroMes(estado, mesTxt) {
+  return redondear(apartados(estado).filter((a) => String(a.fecha).slice(0, 7) === mesTxt).reduce((s, a) => s + a.usd, 0));
+}
+
+/** Presupuesto 20-30-30-20 de un mes: objetivo por %, gastado y lo asignado con el destino de los ingresos. */
 export function presupuesto(estado, mesTxt) {
   const aj = ajustes(estado);
   const m = mes(estado, mesTxt);
-  const ahorroReal = redondear(ahorroMes(estado, mesTxt) + m.porTipo.ahorro);
+  const ahorroReal = redondear(ahorroMes(estado, mesTxt) + (m.porTipo.ahorro || 0));
+  const asignado = (claves) => redondear(claves.reduce((s, k) => s + (m.porDestino[k] || 0), 0));
   const filas = [
-    { clave: 'necesidad', nombre: 'Necesidades', pct: aj.pctNecesidades, real: m.porTipo.necesidad },
-    { clave: 'deseo', nombre: 'Deseos', pct: aj.pctDeseos, real: m.porTipo.deseo },
-    { clave: 'ahorro', nombre: 'Ahorro', pct: aj.pctAhorro, real: ahorroReal },
+    { clave: 'necesidad', nombre: 'Necesidades personales', pct: aj.pctNecesidades, real: m.porTipo.necesidad || 0, asignado: asignado(['necesidades personales', 'pagado a mí']) },
+    { clave: 'desarrollo de negocios', nombre: 'Desarrollo de negocios', pct: aj.pctNegocio, real: m.porTipo['desarrollo de negocios'] || 0, asignado: asignado(['desarrollo de negocios', 'compra y venta']) },
+    { clave: 'deseo', nombre: 'Deseos', pct: aj.pctDeseos, real: m.porTipo.deseo || 0, asignado: asignado(['deseos']) },
+    { clave: 'ahorro', nombre: 'Ahorro', pct: aj.pctAhorro, real: ahorroReal, asignado: asignado(['ahorro', 'meta']) },
   ].map((f) => {
     const objetivo = redondear((m.ingresos * Number(f.pct || 0)) / 100);
     return { ...f, objetivo, diferencia: redondear(objetivo - f.real), pctReal: m.ingresos > 0 ? redondear((f.real / m.ingresos) * 100) : null };
   });
-  const formacion = redondear(m.porCategoria['Formación'] || 0);
+  const formacion = redondear((m.porCategoria['Formación'] || 0) + (m.porCategoria['Formación personal'] || 0) + (m.porCategoria['Formación para negocios'] || 0));
   const inversion = redondear(m.porCategoria['Inversiones'] || 0);
   return { ...m, filas, formacion, inversion, balance: redondear(m.ingresos - m.gastos) };
 }
 
 export function totalesAhorro(estado) {
   const r = { ahorro: 0, 'fondo de emergencia': 0, meta: 0 };
-  for (const a of vivos(estado.ahorros)) {
-    const usd = aUSDHoy(estado, a.monto, a.moneda) || 0;
-    r[a.destino || 'ahorro'] = redondear((r[a.destino || 'ahorro'] || 0) + (a.tipo === 'retiro' ? -usd : usd));
-  }
+  for (const a of apartados(estado)) r[a.destino] = redondear((r[a.destino] || 0) + a.usd);
   return { ...r, total: redondear(r.ahorro + r['fondo de emergencia'] + r.meta) };
+}
+
+/**
+ * Alerta de la cuenta donde se guarda el ahorro (Bancus): si su saldo baja de lo que tendría que estar apartado
+ * para ahorro y metas, se está gastando dinero de más.
+ */
+export function alertaAhorro(estado) {
+  const marcadas = vivos(estado.cuentas).filter((c) => c.guardaAhorro);
+  const cuentas = marcadas.length ? marcadas : vivos(estado.cuentas).filter((c) => /bancus/i.test(c.nombre || ''));
+  const ids = new Set(cuentas.map((c) => c.id));
+  const saldo = redondear(saldos(estado).filter((s) => ids.has(s.cuenta.id)).reduce((a, s) => a + (s.usd || 0), 0));
+  const apartado = totalesAhorro(estado).total;
+  return { cuentas, saldo, apartado, falta: redondear(Math.max(0, apartado - saldo)), alerta: cuentas.length > 0 && apartado > 0 && saldo < apartado };
 }
 
 /** Promedios de los últimos meses con movimientos (sin el mes en curso si hay meses anteriores). */
@@ -407,9 +583,13 @@ export function promedios(estado, hoyF = hoy(), meses = 3) {
 }
 
 export function estadoMeta(estado, meta, hoyF = hoy()) {
-  const aportes = vivos(estado.ahorros).filter((a) => a.meta === meta.id);
-  const ahorradoMoneda = redondear(Number(meta.ahorradoInicial || 0) + aportes.reduce((s, a) => s + (a.tipo === 'retiro' ? -1 : 1) * Number(a.moneda === meta.moneda ? a.monto : 0), 0));
-  const aportesOtraMoneda = aportes.filter((a) => a.moneda !== meta.moneda).length;
+  // Aportes: los de Ahorro y las partes «meta» del reparto de los ingresos. En otra moneda se pasan con la tasa.
+  const aportes = apartados(estado).filter((a) => a.meta === meta.id).map((a) => ({
+    fecha: a.fecha, moneda: meta.moneda, tipo: 'aporte',
+    monto: a.moneda === meta.moneda ? a.monto : desdeUSD(estado, a.usd, meta.moneda),
+  }));
+  const ahorradoMoneda = redondear(Number(meta.ahorradoInicial || 0) + aportes.reduce((s, a) => s + Number(a.monto || 0), 0));
+  const aportesOtraMoneda = aportes.filter((a) => a.monto === null).length;
   const objetivo = Number(meta.objetivo || 0);
   const pendiente = redondear(Math.max(0, objetivo - ahorradoMoneda));
   const pct = objetivo > 0 ? redondear((ahorradoMoneda / objetivo) * 100) : 0;
@@ -516,6 +696,98 @@ export function comparacionP2P(estado) {
   return { filas, totalBruto, totalCup, totalDeMas, pctPonderado };
 }
 
+/** Compras P2P (con CUP pagados) que todavía no tienen registrada la salida de CUP que las pagó. */
+export function p2pSinOrigen(estado) {
+  const pagadas = new Set(vivos(estado.movimientos).filter((m) => m.p2p).map((m) => m.p2p));
+  return vivos(estado.movimientos).filter((m) => Number(m.cupPagados) > 0 && !pagadas.has(m.id));
+}
+
+// --- Triple reporte de Bancus ---------------------------------------------------------------------
+
+const comercio = (m) => String(m.descripcion || '').toUpperCase().replace(/^(COMPRA|DEPOSITO|DEPÓSITO|REVERSA|DEPOSITO REVERSA)\s+/g, '').replace(/REVERSA\s+/g, '').replace(/[^A-Z0-9]/g, '').slice(0, 12);
+
+/**
+ * Bancus reporta algunas compras en 3 movimientos: retención (salida), liberación (entrada) y pago oficial (salida),
+ * con el mismo importe, el mismo comercio y el mismo día. Solo el último es el gasto real.
+ * Devuelve los grupos sin marcar todavía: { retencion: [salida, entrada], oficial }.
+ */
+export function triplesBancus(estado) {
+  const grupos = new Map();
+  for (const m of vivos(estado.movimientos)) {
+    if (!m.fecha || !(Number(m.monto) > 0)) continue;
+    const k = `${m.cuenta}|${m.fecha}|${Number(m.monto).toFixed(2)}|${comercio(m)}`;
+    if (!grupos.has(k)) grupos.set(k, []);
+    grupos.get(k).push(m);
+  }
+  const r = [];
+  for (const lista of grupos.values()) {
+    const salidas = lista.filter((m) => m.tipo === 'salida');
+    const entradas = lista.filter((m) => m.tipo === 'entrada');
+    if (salidas.length !== 2 || entradas.length !== 1) continue;
+    const orden = (m) => `${m.hora || ''}|${m.actualizado || 0}`;
+    salidas.sort((a, b) => (orden(a) < orden(b) ? -1 : 1));
+    const [primera, oficial] = salidas;
+    const yaMarcado = primera.retencion && entradas[0].retencion && !oficial.retencion && !oficial.interno;
+    if (!yaMarcado) r.push({ retencion: [primera, entradas[0]], oficial });
+  }
+  return r;
+}
+
+// --- Compra para revender ---------------------------------------------------------------------------
+
+/** Cuentas de un artículo para revender: costo total (compra + envío Panavana), cobrado, lo que falta y la ganancia. */
+export function estadoArticulo(estado, a) {
+  const aUSDa = (monto, moneda) => (monto === null || monto === undefined || monto === '' ? 0 : aUSDHoy(estado, Number(monto), moneda));
+  const costoUSD = aUSDa(a.costo, a.moneda);
+  const envioUSD = Number(a.costoEnvio || 0);
+  const costoTotalUSD = costoUSD === null ? null : redondear(costoUSD + envioUSD);
+  const precioUSD = aUSDa(a.precioVenta, a.moneda);
+  const anticipoCliente = a.anticipoPone === 'yo' ? 0 : Number(a.anticipo || 0);
+  const cobrado = redondear(anticipoCliente + Number(a.cobrado || 0));
+  const faltaCobrar = Number(a.precioVenta) > 0 ? redondear(Math.max(0, Number(a.precioVenta) - cobrado)) : null;
+  const vendido = a.estado === 'vendido' || (Number(a.precioVenta) > 0 && faltaCobrar === 0 && !!a.fechaVenta);
+  const gananciaUSD = Number(a.precioVenta) > 0 && costoTotalUSD !== null && precioUSD !== null ? redondear(precioUSD - costoTotalUSD) : null;
+  const pctGanancia = gananciaUSD !== null && costoTotalUSD > 0 ? redondear((gananciaUSD / costoTotalUSD) * 100) : null;
+  // La factura de Panavana registrada debe coincidir con el monto que apuntaste aquí.
+  const factura = a.facturaPanavana ? vivos(estado.facturas).find((f) => f.id === a.facturaPanavana) : null;
+  const totalFacturaUSD = factura ? aUSDHoy(estado, totalFactura(factura).total, factura.moneda) : null;
+  const facturaCuadra = factura && Number(a.montoFacturaPanavana) > 0 && totalFacturaUSD !== null ? Math.abs(totalFacturaUSD - Number(a.montoFacturaPanavana)) < 0.01 : null;
+  return { costoUSD, envioUSD, costoTotalUSD, precioUSD, cobrado, faltaCobrar, vendido, gananciaUSD, pctGanancia, factura, totalFacturaUSD, facturaCuadra };
+}
+
+export function totalesReventa(estado) {
+  const r = { invertido: 0, recuperado: 0, enStock: 0, ganancia: 0, faltaCobrar: 0 };
+  for (const a of vivos(estado.articulos)) {
+    const e = estadoArticulo(estado, a);
+    r.invertido += e.costoTotalUSD || 0;
+    r.recuperado += aUSDHoy(estado, e.cobrado, a.moneda) || 0;
+    if (!e.vendido) r.enStock += e.costoTotalUSD || 0;
+    if (e.vendido) r.ganancia += e.gananciaUSD || 0;
+    r.faltaCobrar += aUSDHoy(estado, e.faltaCobrar || 0, a.moneda) || 0;
+  }
+  for (const k of Object.keys(r)) r[k] = redondear(r[k]);
+  return r;
+}
+
+// --- Gastos de negocio ----------------------------------------------------------------------------
+
+/** Gastos de negocio agrupados por negocio y tipo (en $). */
+export function resumenNegocio(estado, mesTxt = null) {
+  const r = { total: 0, porNegocio: {}, sinConvertir: 0 };
+  for (const g of vivos(estado.gastosNegocio)) {
+    if (mesTxt && String(g.fecha).slice(0, 7) !== mesTxt) continue;
+    const usd = aUSD(g.monto, g.moneda, g.tasa) ?? aUSDHoy(estado, g.monto, g.moneda);
+    if (usd === null) { r.sinConvertir++; continue; }
+    const n = g.negocio || 'Sin negocio';
+    r.porNegocio[n] ||= { total: 0, porTipo: {} };
+    r.porNegocio[n].total = redondear(r.porNegocio[n].total + usd);
+    const t = g.tipoGasto === 'anuncio o promoción pagada' && g.tipoAnuncio ? `anuncio · ${g.tipoAnuncio}` : g.tipoGasto || 'otros';
+    r.porNegocio[n].porTipo[t] = redondear((r.porNegocio[n].porTipo[t] || 0) + usd);
+    r.total = redondear(r.total + usd);
+  }
+  return r;
+}
+
 // --- Facturas -------------------------------------------------------------------------------
 
 export function totalFactura(f) {
@@ -595,10 +867,24 @@ export function mezclar(local, remoto) {
 
 const MAX_TEXTO = 2000;
 const RE_ID = /^[A-Za-z0-9_-]{1,80}$/;
-const TIPOS_REFERENCIA = new Set(['cuenta', 'movimiento', 'deuda', 'meta']);
+const TIPOS_REFERENCIA = new Set(['cuenta', 'movimiento', 'deuda', 'meta', 'p2p', 'factura', 'entrada']);
+
+/** Reparto de un ingreso: lista de { destino, texto, meta, monto, pct } (máximo 12 partes). */
+function limpiarReparto(v) {
+  if (!Array.isArray(v)) return null;
+  const partes = v.slice(0, 12).map((p) => ({
+    destino: DESTINOS.includes(p && p.destino) ? p.destino : 'otros',
+    texto: p && p.texto ? enmascararTarjetas(String(p.texto).slice(0, 80)) : null,
+    meta: p && RE_ID.test(String(p.meta || '')) ? String(p.meta) : null,
+    monto: p && Number(p.monto) > 0 && Number.isFinite(Number(p.monto)) ? Number(p.monto) : null,
+    pct: p && Number(p.pct) > 0 && Number(p.pct) <= 100 ? Number(p.pct) : null,
+  })).filter((p) => p.monto || p.pct);
+  return partes.length ? partes : null;
+}
 
 function limpiarValor(campo, v) {
   if (v === null || v === undefined || v === '') return campo.t === 'checkbox' ? false : null;
+  if (campo.t === 'reparto') return limpiarReparto(v);
   switch (campo.t) {
     case 'number': {
       const n = Number(v);
@@ -666,8 +952,19 @@ export function erroresRegistro(coleccion, datos) {
   }
   if (coleccion === 'ahorros' && datos.destino === 'meta' && !datos.meta) errores.push('Elige a qué meta va este aporte.');
   if (coleccion === 'ajustes') {
-    const suma = ['pctNecesidades', 'pctDeseos', 'pctAhorro'].reduce((s, k) => s + Number(datos[k] || 0), 0);
-    if (Math.abs(suma - 100) > 0.001) errores.push(`Los tres porcentajes deben sumar 100 (ahora suman ${suma}).`);
+    const suma = ['pctNecesidades', 'pctNegocio', 'pctDeseos', 'pctAhorro'].reduce((s, k) => s + Number(datos[k] || 0), 0);
+    if (Math.abs(suma - 100) > 0.001) errores.push(`Los cuatro porcentajes deben sumar 100 (ahora suman ${suma}).`);
   }
+  if (coleccion === 'movimientos' && datos.tipo === 'entrada' && Array.isArray(datos.reparto) && datos.reparto.length) {
+    const partes = repartoMovimiento({ ...datos, tasa: null });
+    const suma = redondear(partes.reduce((s, p) => s + p.montoMoneda, 0));
+    if (suma > Number(datos.monto || 0) + 0.005) errores.push(`El reparto (${suma}) es mayor que el ingreso (${datos.monto}).`);
+    if (datos.reparto.some((p) => p.destino === 'meta' && !p.meta)) errores.push('En el reparto, elige a qué meta va la parte «meta».');
+  }
+  if (coleccion === 'hormigas') {
+    if (datos.medio === 'deuda' && !datos.acreedor) errores.push('Escribe a quién le debes este gasto.');
+    if (datos.medio !== 'deuda' && !datos.cuenta) errores.push('Elige de qué cuenta salió el dinero.');
+  }
+  if (coleccion === 'articulos' && Number(datos.anticipo) > 0 && !datos.anticipoPone) errores.push('Indica quién pone el anticipo: tú o el cliente.');
   return errores;
 }

@@ -2,7 +2,7 @@
 // Nunca guarda en caché las llamadas a Google (datos ni permisos).
 // Al publicar una versión nueva de la app, sube el número de VERSION.
 
-const VERSION = 'finanzas-v7';
+const VERSION = 'finanzas-v8';
 const ARCHIVOS = [
   './',
   './index.html',

@@ -150,6 +150,54 @@ async function borrarRegistro(coleccion, id) {
   despuesDeCambiar();
 }
 
+/**
+ * Registros que se crean solos a partir de otros (y se borran con ellos):
+ * - Gasto hormiga en efectivo o transferencia → movimiento de salida «hm-<id>».
+ * - Gasto hormiga a crédito → deuda «hd-<id>» en Deudas.
+ * - Gasto de negocio → movimiento de salida «gn-<id>» (desarrollo de negocios).
+ * Devuelve un texto para el aviso o null.
+ */
+async function sincronizarVinculados(coleccion, r) {
+  const quitar = async (col, id) => { if (M.vivos(estado[col]).some((x) => x.id === id)) await borrarRegistro(col, id); };
+  const tasaDe = (x) => (Number(x.tasa) > 0 ? Number(x.tasa) : M.tasaSugerida(estado, x.moneda, x.fecha)?.valor ?? null);
+  if (coleccion === 'hormigas') {
+    const idMov = `hm-${r.id}`;
+    const idDeuda = `hd-${r.id}`;
+    if (r.borrado) { await quitar('movimientos', idMov); await quitar('deudas', idDeuda); return null; }
+    if (r.medio === 'deuda') {
+      await quitar('movimientos', idMov);
+      const previa = M.vivos(estado.deudas).find((d) => d.id === idDeuda) || {};
+      await guardarRegistro('deudas', {
+        ...previa, id: idDeuda, acreedor: r.acreedor || 'Sin nombre', importeTotal: r.monto, moneda: r.moneda,
+        fechaFin: r.fechaPagoDeuda || previa.fechaFin || null,
+        nota: `Gasto hormiga del ${r.fecha}: ${r.concepto}. Se creó solo desde Gastos hormiga.`,
+      });
+      return 'Apuntado también en Deudas.';
+    }
+    await quitar('deudas', idDeuda);
+    await guardarRegistro('movimientos', {
+      id: idMov, fecha: r.fecha, cuenta: r.cuenta, tipo: 'salida', monto: r.monto, moneda: r.moneda, tasa: tasaDe(r),
+      descripcion: `${r.concepto} (gasto hormiga, ${r.medio})`, categoria: 'Gasto hormiga', tipo503020: 'deseo',
+      ambito: r.ambito || 'personal', verificado: true, fuente: 'Gastos hormiga', nota: 'Se edita en Día a día → Gastos hormiga.',
+    });
+    return 'Apuntado también en Movimientos.';
+  }
+  if (coleccion === 'gastosNegocio') {
+    const idMov = `gn-${r.id}`;
+    if (r.borrado) { await quitar('movimientos', idMov); return null; }
+    const categoria = { formación: 'Formación para negocios', curso: 'Formación para negocios', 'anuncio o promoción pagada': 'Publicidad', 'herramienta o suscripción': 'Suscripción' }[r.tipoGasto] || 'Otros';
+    const detalle = [r.negocio, r.tipoGasto === 'anuncio o promoción pagada' ? r.tipoAnuncio : r.tipoGasto].filter(Boolean).join(' · ');
+    await guardarRegistro('movimientos', {
+      id: idMov, fecha: r.fecha, cuenta: r.cuenta, tipo: 'salida', monto: r.monto, moneda: r.moneda, tasa: tasaDe(r),
+      descripcion: r.concepto, categoria, subcategoria: detalle, tipo503020: 'desarrollo de negocios',
+      ambito: r.ambito || (/insenia|afiliad/i.test(r.negocio || '') ? 'afiliados' : 'desarrollo de empresa y negocios'),
+      verificado: true, fuente: 'Gastos de negocio', nota: 'Se edita en Negocio → Gastos de negocio.',
+    });
+    return 'Apuntado también en Movimientos como gasto de desarrollo de negocios.';
+  }
+  return null;
+}
+
 function repintar() {
   if ($('#dialogo').open) repintarAlCerrar = true;
   else pintar();
@@ -294,11 +342,61 @@ function selectReferencia(id, nombre, lista, etiquetaDe, valor) {
   return h('select', { id, name: nombre }, h('option', { value: '' }, '—'), lista.map((x) => h('option', { value: x.id, selected: x.id === valor }, etiquetaDe(x))));
 }
 
+/** Reparto de un ingreso en varias partes (destino + importe o %). Se lee con leerReparto(). */
+function controlReparto(valor) {
+  const caja = h('div', { class: 'reparto', 'data-reparto': '1' });
+  const metas = M.vivos(estado.metas);
+  const fila = (p = {}) => {
+    const destino = h('select', { 'aria-label': 'Destino' }, M.DESTINOS.map((d) => h('option', { value: d, selected: d === (p.destino || 'necesidades personales') }, d)));
+    const texto = h('input', { type: 'text', placeholder: 'Escribe el destino', maxlength: 80, 'aria-label': 'Otro destino' });
+    texto.value = p.texto || '';
+    const meta = h('select', { 'aria-label': 'Meta' }, h('option', { value: '' }, '— meta —'), metas.map((m) => h('option', { value: m.id, selected: m.id === p.meta }, m.nombre)));
+    const monto = h('input', { type: 'number', step: 'any', min: 0, inputmode: 'decimal', placeholder: 'Importe', 'aria-label': 'Importe' });
+    monto.value = p.monto ?? '';
+    const pct = h('input', { type: 'number', step: 'any', min: 0, max: 100, inputmode: 'decimal', placeholder: '%', 'aria-label': 'Porcentaje' });
+    pct.value = p.pct ?? '';
+    const ajustar = () => { texto.hidden = destino.value !== 'otros'; meta.hidden = destino.value !== 'meta'; };
+    destino.addEventListener('change', ajustar);
+    ajustar();
+    const quitar = h('button', { type: 'button', class: 'boton pequeno', 'aria-label': 'Quitar esta parte' }, '×');
+    const f = h('div', { class: 'reparto-fila' }, destino, texto, meta, monto, pct, quitar);
+    quitar.addEventListener('click', () => f.remove());
+    f._leer = () => ({ destino: destino.value, texto: texto.value.trim() || null, meta: meta.value || null, monto: monto.value === '' ? null : Number(monto.value), pct: pct.value === '' ? null : Number(pct.value) });
+    return f;
+  };
+  const filas = h('div', {});
+  for (const p of Array.isArray(valor) ? valor : []) filas.append(fila(p));
+  caja.append(filas, h('button', { type: 'button', class: 'boton pequeno', onclick: () => filas.append(fila()) }, '+ Añadir parte'),
+    h('small', {}, 'Reparte el ingreso: en cada parte pon un importe o un %. Ahorro y meta pasan solos a Ahorro y a la meta; el resto se ve en el presupuesto.'));
+  return caja;
+}
+
+const leerReparto = (form) => {
+  const caja = form.querySelector('[data-reparto]');
+  if (!caja) return null;
+  const partes = [...caja.querySelectorAll('.reparto-fila')].map((f) => f._leer()).filter((p) => p.monto || p.pct);
+  return partes.length ? partes : null;
+};
+
+function opcionesP2P(seleccionado) {
+  const movs = M.vivos(estado.movimientos).filter((m) => Number(m.cupPagados) > 0).sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+  return [h('option', { value: '' }, '—'), ...movs.map((m) => h('option', { value: m.id, selected: m.id === seleccionado }, `${m.fecha} · ${m.vendedor || m.descripcion} · ${dinero(m.cupPagados, 'CUP')}`))];
+}
+
 function campoFormulario(coleccion, campo, valor) {
   const id = `c-${campo.k}`;
   let control;
   if (campo.t === 'select') {
-    control = h('select', { id, name: campo.k }, h('option', { value: '' }, '—'), campo.op.map((o) => h('option', { value: o, selected: o === valor }, o)));
+    control = h('select', { id, name: campo.k }, h('option', { value: '' }, '—'), campo.op.map((o) => h('option', { value: o, selected: o === valor }, (campo.etq && campo.etq[o]) || o)));
+  } else if (campo.t === 'reparto') {
+    control = controlReparto(valor);
+  } else if (campo.t === 'p2p') {
+    control = h('select', { id, name: campo.k }, opcionesP2P(valor));
+  } else if (campo.t === 'factura') {
+    control = selectReferencia(id, campo.k, M.vivos(estado.facturas).sort((a, b) => (a.fecha < b.fecha ? 1 : -1)), (f) => `${f.fecha} · ${f.proveedor} · ${dinero(M.totalFactura(f).total, f.moneda)}`, valor);
+  } else if (campo.t === 'entrada') {
+    const movs = M.vivos(estado.movimientos).filter((m) => m.tipo === 'entrada' && !m.interno).sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+    control = selectReferencia(id, campo.k, movs, (m) => `${m.fecha} · ${m.descripcion} · ${dinero(m.monto, m.moneda)}`, valor);
   } else if (campo.t === 'cuenta') {
     control = selectReferencia(id, campo.k, M.vivos(estado.cuentas), (c) => `${c.nombre} (${c.moneda})`, valor);
   } else if (campo.t === 'deuda') {
@@ -325,8 +423,8 @@ function campoFormulario(coleccion, campo, valor) {
     if (campo.sug) control.setAttribute('list', `lista-${campo.k}`);
     control.value = valor ?? '';
   }
-  if (campo.req) control.required = true;
-  return h('div', { class: `campo ${campo.t === 'checkbox' ? 'campo-check' : ''}` },
+  if (campo.req && campo.t !== 'reparto') control.required = true;
+  return h('div', { class: `campo ${campo.t === 'checkbox' ? 'campo-check' : ''}`, 'data-campo': campo.k },
     campo.t === 'checkbox' ? [control, h('label', { for: id }, campo.l)] : [h('label', { for: id }, campo.l, campo.req ? ' *' : ''), control],
     campo.sug ? h('datalist', { id: `lista-${campo.k}` }, campo.sug.map((s) => h('option', { value: s }))) : null,
     campo.ayuda ? h('small', {}, campo.ayuda) : null,
@@ -336,6 +434,7 @@ function campoFormulario(coleccion, campo, valor) {
 function leerFormulario(form, coleccion) {
   const datos = {};
   for (const campo of M.CAMPOS[coleccion]) {
+    if (campo.t === 'reparto') { datos[campo.k] = leerReparto(form); continue; }
     const el = form.elements[campo.k];
     if (!el) continue;
     if (campo.t === 'checkbox') datos[campo.k] = el.checked;
@@ -350,6 +449,7 @@ const TITULOS = {
   paquetes: 'paquete', tasasBancus: 'tasa de Bancus', tasasToque: 'tasa de El Toque', tasasEUR: 'tasa del euro',
   personales: 'apunte personal', notas: 'nota', ahorros: 'aporte o retiro de ahorro', metas: 'meta', deudas: 'deuda',
   inversiones: 'inversión', activosPasivos: 'activo o pasivo', ajustes: 'ajustes',
+  articulos: 'artículo para revender', hormigas: 'gasto hormiga', gastosNegocio: 'gasto de negocio',
 };
 
 function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
@@ -361,23 +461,46 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
   const errores = h('div', { class: 'errores', role: 'alert' });
   form.append(errores);
 
-  if (coleccion === 'movimientos') {
-    // Moneda según la cuenta y tasa del día según la moneda (se congela al guardar).
+  let notaTasa = null; // si la tasa no es la del día exacto, se anota en la nota al guardar
+  if (['movimientos', 'hormigas', 'gastosNegocio'].includes(coleccion)) {
+    // Tasa del día según la moneda (se congela al guardar). Si falta la del día, la verificada más cercana, marcada.
     const ponerTasa = () => {
       const f = form.elements.fecha.value;
       const mon = form.elements.moneda.value;
       if (f && mon && !form.elements.tasa.value) {
         const t = M.tasaSugerida(estado, mon, f);
-        if (t) form.elements.tasa.value = t.valor;
+        if (t) {
+          form.elements.tasa.value = t.valor;
+          notaTasa = t.exacta ? null : `Tasa aproximada: no hay tasa de ${mon} del ${f}; se usó la del ${t.fecha}.`;
+        }
       }
     };
-    form.elements.cuenta.addEventListener('change', () => {
-      const c = cuentaPorId(form.elements.cuenta.value);
-      if (c) form.elements.moneda.value = c.moneda;
-      ponerTasa();
-    });
+    if (form.elements.cuenta && coleccion === 'movimientos') {
+      form.elements.cuenta.addEventListener('change', () => {
+        const c = cuentaPorId(form.elements.cuenta.value);
+        if (c && !registro && !valoresIniciales.moneda) form.elements.moneda.value = c.moneda;
+        ponerTasa();
+      });
+    }
     form.elements.fecha.addEventListener('change', ponerTasa);
-    form.elements.moneda.addEventListener('change', ponerTasa);
+    form.elements.moneda.addEventListener('change', () => { form.elements.tasa.value = ''; ponerTasa(); });
+    queueMicrotask(ponerTasa);
+  }
+  if (coleccion === 'movimientos') {
+    // Entradas: reparto del ingreso. Salidas: tipo de gasto en el presupuesto.
+    const mostrar = () => {
+      const entrada = form.elements.tipo.value === 'entrada';
+      form.querySelector('[data-campo="reparto"]').hidden = !entrada;
+      form.querySelector('[data-campo="tipo503020"]').hidden = entrada;
+      form.querySelector('[data-campo="p2p"]').hidden = entrada;
+    };
+    form.elements.tipo.addEventListener('change', mostrar);
+    mostrar();
+  }
+  if (coleccion === 'gastosNegocio') {
+    form.elements.negocio.addEventListener('change', () => {
+      if (!form.elements.ambito.value) form.elements.ambito.value = /insenia|afiliad/i.test(form.elements.negocio.value) ? 'afiliados' : 'desarrollo de empresa y negocios';
+    });
   }
 
   const borrable = registro && coleccion !== 'ajustes';
@@ -385,6 +508,7 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
     borrable ? h('button', { type: 'button', class: 'boton peligro', onclick: async () => {
       if (!confirm('¿Borrar este registro? Se borrará también en el archivo del PC.')) return;
       await borrarRegistro(coleccion, registro.id);
+      await sincronizarVinculados(coleccion, { id: registro.id, borrado: true });
       dlg.close();
       aviso('Borrado.');
     } }, 'Borrar') : null,
@@ -404,9 +528,14 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
       errores.replaceChildren(...lista.map((t) => h('p', {}, t)));
       return;
     }
-    await guardarRegistro(coleccion, { ...nuevos, id: registro ? registro.id : datos.id || uid() });
+    if (coleccion === 'movimientos') {
+      if (nuevos.tipo === 'entrada') { nuevos.tipo503020 = null; nuevos.p2p = null; } else nuevos.reparto = null;
+    }
+    if (notaTasa && Number(nuevos.tasa) > 0 && 'nota' in nuevos && !/aproximada/i.test(nuevos.nota || '')) nuevos.nota = [nuevos.nota, notaTasa].filter(Boolean).join(' ');
+    const guardado = await guardarRegistro(coleccion, { ...nuevos, id: registro ? registro.id : datos.id || uid() });
+    const extra = await sincronizarVinculados(coleccion, guardado);
     dlg.close();
-    aviso('Guardado.');
+    aviso(extra ? `Guardado. ${extra}` : 'Guardado.');
   });
 
   dlg.replaceChildren(form);
@@ -470,6 +599,21 @@ function vistaBienvenida() {
   );
 }
 
+/** En qué se va el dinero del mes: tipo de gasto → categoría → detalle (p. ej. Formación personal → curso de inglés). */
+function tarjetaEnQueSeVa(p, mesTxt) {
+  const tipos = ['necesidad', 'desarrollo de negocios', 'deseo', 'ahorro', 'no aplica', 'sin clasificar'].filter((t) => p.detalle[t]);
+  const destinos = Object.entries(p.porDestino).filter(([, v]) => v > 0);
+  return tarjeta(`En qué se va el dinero (${mesTxt})`,
+    tipos.length ? tipos.map((t) => h('details', { class: 'desglose' },
+      h('summary', {}, h('span', {}, M.NOMBRES_TIPO[t] || t), h('strong', {}, usd(p.porTipo[t] || 0))),
+      h('ul', { class: 'lista-simple' }, Object.entries(p.detalle[t]).sort((a, b) => b[1].total - a[1].total).map(([cat, c]) => h('li', { class: 'desglose-cat' },
+        h('div', { class: 'linea-barra-texto' }, h('span', {}, cat), h('span', {}, usd(c.total))),
+        Object.keys(c.sub).length ? h('ul', { class: 'desglose-sub' }, Object.entries(c.sub).sort((a, b) => b[1] - a[1]).map(([s, v]) => h('li', {}, h('span', {}, s), h('span', {}, usd(v))))) : null))))) : vacio('Sin gastos este mes.'),
+    p.gananciaReventa ? explicacion(`Ganancia de compra y venta sumada a tus ingresos: ${usd(p.gananciaReventa)}.`) : null,
+    destinos.length ? [h('h3', {}, 'Destino de tus ingresos'), h('ul', { class: 'lista-simple' }, destinos.map(([d, v]) => h('li', {}, h('span', {}, d), h('span', {}, usd(v)))))] : null,
+  );
+}
+
 function vistaResumen() {
   const hoyF = hoy();
   const s = M.saldos(estado);
@@ -483,9 +627,12 @@ function vistaResumen() {
   const pat = M.patrimonio(estado);
   const metas = M.vivos(estado.metas).filter((m) => m.estado !== 'cumplida').slice(0, 4);
   const facturasRevisar = M.vivos(estado.facturas).map((f) => ({ f, c: M.conciliacion(estado, f) })).filter(({ c }) => c.revisar);
+  const ahorroAl = M.alertaAhorro(estado);
 
   return h('div', {},
     cabecera('Resumen', h('button', { class: 'boton primario', onclick: () => nuevoMovimiento() }, '+ Movimiento')),
+    ahorroAl.alerta ? h('div', { class: 'banda peligro', role: 'alert' }, h('strong', {}, `Estás gastando dinero de tu ahorro. `),
+      `En ${ahorroAl.cuentas.map((c) => c.nombre).join(' + ')} hay ${usd(ahorroAl.saldo)}, pero tendrías que tener ${usd(ahorroAl.apartado)} guardados para ahorro y metas. Te has pasado en ${usd(ahorroAl.falta)}.`) : null,
     alerta.falta > 0 ? h('div', { class: 'banda peligro', role: 'alert' }, h('strong', {}, 'Saldo insuficiente para los próximos cobros. '), `En los próximos 30 días se cobran ${usd(alerta.necesario)} y hay ${usd(alerta.disponible)}. Faltan ${usd(alerta.falta)}.`) : null,
     alerta.sinTasa.length ? h('div', { class: 'banda alerta' }, `Cobros sin conversión a $ (no entran en la alerta): ${alerta.sinTasa.join(', ')}. Añade la tasa en Cambio y envíos → Tasas.`) : null,
     h('div', { class: 'cifras' },
@@ -496,19 +643,23 @@ function vistaResumen() {
     ),
     h('div', { class: 'rejilla' },
       tarjeta('Saldos',
-        h('ul', { class: 'lista-simple' }, s.map((x) => h('li', {}, h('span', {}, x.cuenta.nombre), montoConUSD(x.saldo, x.cuenta.moneda, x.usd, x.tasa ? x.tasa.valor : null, x.tasa ? `del ${fechaLarga(x.tasa.fecha)}` : '')))),
+        h('ul', { class: 'lista-simple' }, s.map((x) => h('li', {},
+          h('span', {}, x.cuenta.nombre, ahorroAl.alerta && ahorroAl.cuentas.some((c) => c.id === x.cuenta.id) ? etiqueta('por debajo del ahorro', 'alerta') : null),
+          h('span', {}, x.monedas.map((mo, i) => [i ? h('br', {}) : null, dinero(mo.saldo, mo.moneda)]), h('small', {}, x.usd !== null ? ` ≈ ${usd(x.usd)}` : ' · sin tasa'))))),
+        ahorroAl.apartado > 0 ? explicacion(`Apartado para ahorro y metas: ${usd(ahorroAl.apartado)} (debe quedar en ${ahorroAl.cuentas.map((c) => c.nombre).join(' + ') || 'la cuenta de ahorro'}).`) : null,
       ),
+      tarjetaEnQueSeVa(pres, hoyF.slice(0, 7)),
       tarjeta('Próximos cobros',
         vencidos.length ? h('div', { class: 'banda alerta' }, 'Cobros con la fecha pasada (¿se cobraron?):', h('ul', {}, vencidos.map((c) => h('li', {}, `${c.s.nombre} · ${fechaLarga(c.s.proximoCobro)} `, h('button', { class: 'boton pequeno', onclick: () => marcarCobrado(c.s) }, 'Sí, pasar al siguiente'))))) : null,
         proximos.length ? h('ul', { class: 'lista-simple' }, proximos.map((c) => h('li', { class: c.dias <= (c.s.avisoDias ?? 5) ? 'pronto' : '' },
           h('span', {}, c.s.nombre, c.s.estado !== 'activa' ? etiqueta(c.s.estado, 'alerta') : null),
           h('span', {}, dinero(c.s.monto, c.s.moneda), h('small', {}, c.dias === 0 ? ' · hoy' : ` · en ${c.dias} días`))))) : vacio('No hay cobros en los próximos 60 días.'),
       ),
-      tarjeta(`Presupuesto 50-30-20 de ${hoyF.slice(0, 7)}`,
+      tarjeta(`Presupuesto 20-30-30-20 de ${hoyF.slice(0, 7)}`,
         pres.ingresos > 0 ? pres.filas.map((f) => h('div', { class: 'linea-barra' },
           h('div', { class: 'linea-barra-texto' }, h('span', {}, `${f.nombre} (${numero(f.pct)} %)`), h('span', {}, `${usd(f.real)} de ${usd(f.objetivo)}`)),
           barra(f.objetivo > 0 ? (f.real / f.objetivo) * 100 : 0, f.clave !== 'ahorro' && f.real > f.objetivo ? 'peligro' : ''))) : vacio('Sin ingresos registrados este mes.'),
-        pres.sinClasificar.length ? h('p', {}, h('button', { class: 'enlace', onclick: () => irA('diario', 'presupuesto') }, `${pres.sinClasificar.length} gastos sin clasificar como necesidad o deseo`)) : null,
+        pres.sinClasificar.length ? h('p', {}, h('button', { class: 'enlace', onclick: () => irA('diario', 'presupuesto') }, `${pres.sinClasificar.length} gastos sin clasificar`)) : null,
       ),
       tarjeta('Metas',
         metas.length ? metas.map((m) => {
@@ -551,15 +702,34 @@ function filaMovimiento(m) {
     ),
     h('div', { class: 'fila-detalle' },
       c ? etiqueta(c.nombre) : etiqueta('sin cuenta', 'alerta'),
-      m.interno ? etiqueta('interno') : m.ambito ? etiqueta(m.ambito) : etiqueta('sin ámbito', 'alerta'),
+      m.retencion ? etiqueta('retención de Bancus (no cuenta)') : m.interno ? etiqueta('interno') : m.ambito ? etiqueta(m.ambito) : etiqueta('sin ámbito', 'alerta'),
       m.categoria ? etiqueta(m.categoria) : null,
-      !m.interno && m.tipo === 'salida' ? (m.tipo503020 ? etiqueta(m.tipo503020) : etiqueta('sin 50-30-20', 'alerta')) : null,
+      m.subcategoria ? etiqueta(m.subcategoria) : null,
+      !m.interno && !m.retencion && m.tipo === 'salida' ? (m.tipo503020 ? etiqueta(M.NOMBRES_TIPO[m.tipo503020] || m.tipo503020) : etiqueta('sin tipo de gasto', 'alerta')) : null,
+      M.repartoMovimiento(m).map((p) => etiqueta(`→ ${p.destino === 'otros' ? p.texto || 'otros' : p.destino === 'meta' ? `meta ${(M.vivos(estado.metas).find((x) => x.id === p.meta) || {}).nombre || ''}` : p.destino}: ${dinero(p.montoMoneda, m.moneda)}`, 'ok')),
       m.deuda ? etiqueta('pago de deuda') : null,
       m.verificado ? etiqueta('verificado', 'ok') : etiqueta('no verificado'),
       m.dispositivo === 'muse' ? etiqueta('vía Muse') : null,
       /aproximada/i.test(m.nota || '') ? etiqueta('tasa aproximada', 'alerta') : null,
     ),
   );
+}
+
+/** Triple reporte de Bancus: retención + liberación + pago oficial. Solo el pago oficial es gasto. */
+function avisoTriples() {
+  const triples = M.triplesBancus(estado);
+  if (!triples.length) return null;
+  return h('div', { class: 'banda alerta' },
+    h('strong', {}, 'Posible triple reporte de Bancus. '),
+    'Bancus a veces apunta una compra 3 veces: retención, liberación y pago oficial. Solo el último es el gasto real. Revisa y confirma:',
+    h('ul', {}, triples.map((t) => h('li', {},
+      `${fechaLarga(t.oficial.fecha)} · ${t.oficial.descripcion} · ${dinero(t.oficial.monto, t.oficial.moneda)} `,
+      h('button', { class: 'boton pequeno', onclick: async () => {
+        for (const m of t.retencion) await guardarRegistro('movimientos', { ...m, retencion: true, interno: false });
+        await guardarRegistro('movimientos', { ...t.oficial, retencion: false, interno: false });
+        aviso('Hecho: queda solo el pago oficial como gasto.');
+        repintar();
+      } }, 'Sí, contar solo el pago oficial')))));
 }
 
 function vistaMovimientos() {
@@ -569,6 +739,7 @@ function vistaMovimientos() {
     .filter((m) => !filtros.desde || m.fecha >= filtros.desde)
     .filter((m) => !filtros.hasta || m.fecha <= filtros.hasta)
     .filter((m) => !filtros.soloPendientes || !m.verificado)
+    .filter((m) => !filtros.destino || M.repartoMovimiento(m).some((p) => p.destino === filtros.destino))
     .filter((m) => !filtros.texto || `${m.descripcion} ${m.categoria} ${m.nota}`.toLowerCase().includes(filtros.texto.toLowerCase()))
     .sort((a, b) => (`${a.fecha} ${a.hora || ''}` < `${b.fecha} ${b.hora || ''}` ? 1 : -1));
   const cambiar = (k) => (e) => { filtros[k] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; pintar(); };
@@ -580,8 +751,10 @@ function vistaMovimientos() {
       h('input', { type: 'date', 'aria-label': 'Desde', value: filtros.desde, onchange: cambiar('desde') }),
       h('input', { type: 'date', 'aria-label': 'Hasta', value: filtros.hasta, onchange: cambiar('hasta') }),
       h('input', { type: 'search', placeholder: 'Buscar…', 'aria-label': 'Buscar', value: filtros.texto, onchange: cambiar('texto') }),
+      h('select', { 'aria-label': 'Destino del ingreso', onchange: cambiar('destino') }, h('option', { value: '' }, 'Cualquier destino'), M.DESTINOS.map((d) => h('option', { value: d, selected: filtros.destino === d }, d))),
       h('label', { class: 'campo-check' }, h('input', { type: 'checkbox', checked: filtros.soloPendientes, onchange: cambiar('soloPendientes') }), 'Solo no verificados'),
     ),
+    avisoTriples(),
     h('p', { class: 'contador' }, `${lista.length} movimientos`),
     lista.length ? h('ul', { class: 'filas' }, lista.map(filaMovimiento)) : vacio('No hay movimientos con estos filtros.'),
   );
@@ -660,21 +833,22 @@ function vistaPresupuesto() {
   const p = M.presupuesto(estado, filtros.mes);
   const aj = M.ajustes(estado);
   return h('div', {},
-    cabecera('Presupuesto 50-30-20', selectorMes(), h('button', { class: 'boton', onclick: () => abrirFormulario('ajustes', { ...aj }, {}) }, 'Cambiar porcentajes')),
-    explicacion('De lo que ingresas en el mes: una parte para necesidades, otra para deseos y otra para ahorro. Cada gasto se clasifica en su movimiento (campo «Tipo 50-30-20»). Los movimientos internos no cuentan.'),
+    cabecera('Presupuesto 20-30-30-20', selectorMes(), h('button', { class: 'boton', onclick: () => abrirFormulario('ajustes', { ...aj }, {}) }, 'Cambiar porcentajes')),
+    explicacion(`De lo que ingresas en el mes: ${numero(aj.pctNecesidades)} % necesidades personales, ${numero(aj.pctNegocio)} % desarrollo de negocios, ${numero(aj.pctDeseos)} % deseos y ${numero(aj.pctAhorro)} % ahorro. Cada gasto se clasifica en su movimiento («Tipo de gasto»); cada ingreso puede repartirse («Para qué va este ingreso»). No cuentan los movimientos internos, las retenciones de Bancus ni las compras y ventas para revender (su ganancia sí entra como ingreso).`),
     h('div', { class: 'cifras' }, cifra('Ingresos del mes', usd(p.ingresos)), cifra('Gastos del mes', usd(p.gastos)), cifra('Balance', usd(p.balance), null, p.balance < 0 ? 'negativo' : '')),
     p.sinConvertir ? h('div', { class: 'banda alerta' }, `${p.sinConvertir} movimientos sin tasa no entran en las cuentas.`) : null,
     tarjeta('Objetivo y real',
-      tabla(['Partida', '% objetivo', 'Objetivo', 'Real', '% real', 'Diferencia', ''], p.filas.map((f) => h('tr', {},
-        h('td', {}, f.nombre), h('td', {}, pct(f.pct)), h('td', {}, usd(f.objetivo)), h('td', {}, usd(f.real)), h('td', {}, pct(f.pctReal)),
+      tabla(['Partida', '% objetivo', 'Objetivo', 'Asignado a los ingresos', 'Gastado / apartado', '% real', 'Diferencia', ''], p.filas.map((f) => h('tr', {},
+        h('td', {}, f.nombre), h('td', {}, pct(f.pct)), h('td', {}, usd(f.objetivo)), h('td', {}, usd(f.asignado)), h('td', {}, usd(f.real)), h('td', {}, pct(f.pctReal)),
         h('td', { class: f.clave !== 'ahorro' && f.diferencia < 0 ? 'negativo' : '' }, usd(f.diferencia)),
         h('td', { class: 'celda-barra' }, barra(f.objetivo > 0 ? (f.real / f.objetivo) * 100 : 0, f.clave !== 'ahorro' && f.real > f.objetivo ? 'peligro' : ''))))),
-      explicacion(`Ahorro real = lo apuntado en Ahorro y patrimonio → Ahorro este mes + los gastos marcados como «ahorro». Subpartidas: formación ${usd(p.formacion)} · inversiones ${usd(p.inversion)} (por categoría).`),
+      explicacion(`«Asignado» = lo que repartiste de tus ingresos a cada partida (necesidades incluye «pagado a mí»; negocios incluye «compra y venta»). Ahorro real = lo apartado en Ahorro + partes «ahorro» y «meta» de los ingresos + gastos marcados como ahorro. Formación: ${usd(p.formacion)} · inversiones ${usd(p.inversion)}.`),
     ),
+    tarjetaEnQueSeVa(p, filtros.mes),
     tarjeta(`Gastos sin clasificar (${p.sinClasificar.length})`,
       p.sinClasificar.length ? h('ul', { class: 'lista-simple' }, p.sinClasificar.map((m) => h('li', {},
         h('span', {}, `${fechaLarga(m.fecha)} · ${m.descripcion} · ${usd(M.usdMovimiento(m))}`),
-        h('span', { class: 'botones-linea' }, M.TIPOS_503020.map((t) => h('button', { class: 'boton pequeno', onclick: async () => { await guardarRegistro('movimientos', { ...m, tipo503020: t }); repintar(); } }, t)))))) : vacio('Todos los gastos del mes están clasificados.'),
+        h('span', { class: 'botones-linea' }, M.TIPOS_503020.map((t) => h('button', { class: 'boton pequeno', onclick: async () => { await guardarRegistro('movimientos', { ...m, tipo503020: t }); repintar(); } }, M.NOMBRES_TIPO[t] || t)))))) : vacio('Todos los gastos del mes están clasificados.'),
     ),
     tarjeta('Por categoría',
       Object.keys(p.porCategoria).length ? tabla(['Categoría', 'Gasto'], Object.entries(p.porCategoria).sort((a, b) => b[1] - a[1]).map(([c, v]) => h('tr', {}, h('td', {}, c), h('td', {}, usd(v))))) : vacio('Sin gastos este mes.'),
@@ -844,11 +1018,17 @@ function vistaHistorial() {
 function vistaP2P() {
   const c = M.comparacionP2P(estado);
   const sinCup = M.vivos(estado.movimientos).filter((m) => /p2p/i.test(m.categoria || '') && !(Number(m.cupPagados) > 0));
+  const sinOrigen = M.p2pSinOrigen(estado);
   return h('div', {},
     cabecera('QvaPay vs El Toque'),
     explicacion('Tasa del vendedor = CUP pagados ÷ $ comprados (bruto). Tasa efectiva = CUP pagados ÷ $ recibidos (neto, tras la comisión de QvaPay). El % compara con la tasa de El Toque de ese día.'),
     sinCup.length ? h('div', { class: 'banda alerta' }, `${sinCup.length} compras P2P sin «CUP pagados». Ábrelas y escribe lo que pagaste.`,
       h('ul', {}, sinCup.map((m) => h('li', {}, h('button', { class: 'enlace', onclick: () => abrirFormulario('movimientos', m) }, `${fechaLarga(m.fecha)} · ${m.vendedor || m.descripcion}`))))) : null,
+    sinOrigen.length ? h('div', { class: 'banda alerta' },
+      h('strong', {}, `${sinOrigen.length} compras P2P sin la salida de CUP que las pagó. `),
+      'El CUP tuvo que salir de BANDEC o del efectivo: regístralo para que el saldo de CUP cuadre (será un traspaso interno, no un gasto).',
+      h('ul', {}, sinOrigen.map((m) => h('li', {}, `${fechaLarga(m.fecha)} · ${m.vendedor || m.descripcion} · ${dinero(m.cupPagados, 'CUP')} `,
+        h('button', { class: 'boton pequeno', onclick: () => nuevoMovimiento({ fecha: m.fecha, hora: m.hora, tipo: 'salida', moneda: 'CUP', monto: m.cupPagados, interno: true, p2p: m.id, descripcion: `CUP para P2P ${m.vendedor || ''}`.trim(), categoria: 'Cambio de moneda' }) }, 'Registrar la salida de CUP'))))) : null,
     tarjeta('Compras',
       c.filas.length ? tabla(['Fecha', 'Vendedor', '$ bruto', '$ neto', 'CUP pagados', 'Tasa vendedor', 'Tasa efectiva', 'El Toque', '% sobre El Toque', 'CUP de más'],
         c.filas.map((f) => h('tr', { onclick: () => abrirFormulario('movimientos', f.m), class: 'clicable' },
@@ -949,10 +1129,15 @@ const NOMBRES_HOJA = {
   cuentas: 'Cuentas', movimientos: 'Movimientos', suscripciones: 'Gastos fijos', facturas: 'Facturas', paquetes: 'Panavana',
   tasasBancus: 'Tasas Bancus', tasasToque: 'Tasas El Toque', tasasEUR: 'Tasas EUR', personales: 'Personal (antiguo)', notas: 'Notas',
   ahorros: 'Ahorro', metas: 'Metas', deudas: 'Deudas', inversiones: 'Inversiones', activosPasivos: 'Activos y pasivos', ajustes: 'Ajustes',
+  articulos: 'Compra y venta', hormigas: 'Gastos hormiga', gastosNegocio: 'Gastos de negocio',
 };
 
 function exportarExcel() {
-  const refs = { cuenta: (v) => cuentaPorId(v)?.nombre, deuda: (v) => M.vivos(estado.deudas).find((d) => d.id === v)?.acreedor, meta: (v) => M.vivos(estado.metas).find((m) => m.id === v)?.nombre };
+  const nombreMeta = (v) => M.vivos(estado.metas).find((m) => m.id === v)?.nombre;
+  const refs = {
+    cuenta: (v) => cuentaPorId(v)?.nombre, deuda: (v) => M.vivos(estado.deudas).find((d) => d.id === v)?.acreedor, meta: nombreMeta,
+    reparto: (v) => (Array.isArray(v) ? v.map((p) => `${p.destino === 'otros' ? p.texto || 'otros' : p.destino === 'meta' ? `meta ${nombreMeta(p.meta) || ''}` : p.destino}: ${p.monto ?? `${p.pct} %`}`).join('; ') : ''),
+  };
   const hojas = M.COLECCIONES.filter((c) => M.vivos(estado[c]).length).map((c) => {
     const campos = M.CAMPOS[c];
     const filas = [campos.map((x) => x.l)];
@@ -1189,12 +1374,81 @@ function vistaDatos() {
 // Navegación por grupos
 // ---------------------------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------------------------
+// Vistas nuevas (18 nov 2026): gastos hormiga, gastos de negocio y compra para revender
+// ---------------------------------------------------------------------------------------------
+
+const usdDe = (monto, moneda, tasa) => M.aUSD(monto, moneda, tasa) ?? M.aUSDHoy(estado, monto, moneda);
+
+function vistaHormigas() {
+  const lista = M.vivos(estado.hormigas).filter((g) => String(g.fecha).slice(0, 7) === filtros.mes).sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+  const porMedio = { efectivo: 0, transferencia: 0, deuda: 0 };
+  for (const g of lista) porMedio[g.medio] = (porMedio[g.medio] || 0) + (usdDe(g.monto, g.moneda, g.tasa) || 0);
+  const total = Object.values(porMedio).reduce((a, b) => a + b, 0);
+  return h('div', {},
+    cabecera('Gastos hormiga', selectorMes(), h('button', { class: 'boton primario', onclick: () => abrirFormulario('hormigas', null, { fecha: hoy(), medio: 'efectivo', moneda: 'CUP', ambito: 'personal' }) }, '+ Gasto hormiga')),
+    explicacion('Los gastos pequeños de cada día (café, transporte, merienda…). Si pagas en efectivo o por transferencia, se apuntan solos en Movimientos; si te endeudas, se apuntan solos en Deudas con su acreedor y fecha.'),
+    h('div', { class: 'cifras' },
+      cifra('Total del mes', usd(total), `${lista.length} gastos`),
+      cifra('En efectivo', usd(porMedio.efectivo)), cifra('Por transferencia', usd(porMedio.transferencia)), cifra('A crédito (deudas)', usd(porMedio.deuda), null, porMedio.deuda > 0 ? 'negativo' : '')),
+    lista.length ? h('ul', { class: 'filas' }, lista.map((g) => h('li', { class: 'fila salida', tabindex: 0, onclick: () => abrirFormulario('hormigas', g) },
+      h('div', { class: 'fila-principal' }, h('span', { class: 'fecha' }, fechaLarga(g.fecha)), h('span', { class: 'descripcion' }, g.concepto), h('span', { class: 'importe salida' }, '−', montoConUSD(g.monto, g.moneda, usdDe(g.monto, g.moneda, g.tasa), g.tasa))),
+      h('div', { class: 'fila-detalle' }, etiqueta(g.medio, g.medio === 'deuda' ? 'alerta' : ''), g.medio === 'deuda' ? etiqueta(`debes a ${g.acreedor}`) : cuentaPorId(g.cuenta) ? etiqueta(cuentaPorId(g.cuenta).nombre) : null, g.ambito ? etiqueta(g.ambito) : null)))) : vacio('Sin gastos hormiga este mes.'),
+  );
+}
+
+function vistaNegocio() {
+  const r = M.resumenNegocio(estado, filtros.mes);
+  const lista = M.vivos(estado.gastosNegocio).filter((g) => String(g.fecha).slice(0, 7) === filtros.mes).sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+  return h('div', {},
+    cabecera('Gastos de negocio', selectorMes(), h('button', { class: 'boton primario', onclick: () => abrirFormulario('gastosNegocio', null, { fecha: hoy(), negocio: 'Afiliados Insenia', tipoGasto: 'anuncio o promoción pagada', moneda: 'USD', ambito: 'afiliados' }) }, '+ Gasto de negocio')),
+    explicacion('Formación, cursos, anuncios y promociones pagadas, herramientas… de cada negocio. Se apuntan solos en Movimientos como gasto de «desarrollo de negocios» (los de Insenia, con el ámbito «afiliados»).'),
+    h('div', { class: 'cifras' }, cifra('Gasto de negocio del mes', usd(r.total), `${lista.length} gastos`)),
+    Object.keys(r.porNegocio).length ? h('div', { class: 'rejilla' }, Object.entries(r.porNegocio).map(([n, x]) => tarjeta(`${n}: ${usd(x.total)}`,
+      h('ul', { class: 'lista-simple' }, Object.entries(x.porTipo).sort((a, b) => b[1] - a[1]).map(([t, v]) => h('li', {}, h('span', {}, t), h('span', {}, usd(v)))))))) : null,
+    lista.length ? tarjeta('Detalle', h('ul', { class: 'filas' }, lista.map((g) => h('li', { class: 'fila salida', tabindex: 0, onclick: () => abrirFormulario('gastosNegocio', g) },
+      h('div', { class: 'fila-principal' }, h('span', { class: 'fecha' }, fechaLarga(g.fecha)), h('span', { class: 'descripcion' }, g.concepto), h('span', { class: 'importe salida' }, '−', montoConUSD(g.monto, g.moneda, usdDe(g.monto, g.moneda, g.tasa), g.tasa))),
+      h('div', { class: 'fila-detalle' }, etiqueta(g.negocio), etiqueta(g.tipoGasto), g.tipoAnuncio ? etiqueta(g.tipoAnuncio) : null, g.ambito ? etiqueta(g.ambito) : null))))) : vacio('Sin gastos de negocio este mes.'),
+  );
+}
+
+function vistaReventa() {
+  const t = M.totalesReventa(estado);
+  const lista = M.vivos(estado.articulos).sort((a, b) => (String(a.fechaCompra) < String(b.fechaCompra) ? 1 : -1));
+  return h('div', {},
+    cabecera('Compra y venta', h('button', { class: 'boton primario', onclick: () => abrirFormulario('articulos', null, { fechaCompra: hoy(), moneda: 'USD', cantidad: 1, estado: 'en stock', ambito: 'desarrollo de empresa y negocios' }) }, '+ Artículo')),
+    explicacion('Lo que compras para revender (zapatos, ventiladores…). La compra no cuenta como gasto del mes ni la venta como ingreso normal: cuando lo vendes, la ganancia (venta − compra − envío de Panavana) entra en tus ingresos.'),
+    h('div', { class: 'cifras' },
+      cifra('Invertido (compra + envío)', usd(t.invertido)), cifra('Cobrado', usd(t.recuperado)), cifra('Falta por cobrar', usd(t.faltaCobrar), null, t.faltaCobrar > 0 ? 'negativo' : ''),
+      cifra('En stock (a costo)', usd(t.enStock)), cifra('Ganancia total', usd(t.ganancia), 'ya sumada a tus ingresos', t.ganancia < 0 ? 'negativo' : '')),
+    lista.length ? h('div', { class: 'rejilla' }, lista.map((a) => {
+      const e = M.estadoArticulo(estado, a);
+      return tarjeta(`${a.nombre}${Number(a.cantidad) > 1 ? ` ×${numero(a.cantidad)}` : ''}`,
+        h('ul', { class: 'lista-simple' },
+          h('li', {}, h('span', {}, 'Compra'), h('span', {}, dinero(a.costo, a.moneda), a.tienda ? h('small', {}, ` · ${a.tienda}`) : null)),
+          h('li', {}, h('span', {}, 'Envío Panavana'), h('span', {}, a.costoEnvio ? usd(a.costoEnvio) : '—', a.peso ? h('small', {}, ` · ${numero(a.peso)} lb`) : null)),
+          h('li', {}, h('span', {}, 'Factura de Panavana'), h('span', {}, a.montoFacturaPanavana ? usd(a.montoFacturaPanavana) : '—', ' ',
+            e.factura ? (e.facturaCuadra ? etiqueta('coincide con la factura', 'ok') : etiqueta(`no coincide: la factura dice ${usd(e.totalFacturaUSD)}`, 'alerta')) : a.montoFacturaPanavana ? etiqueta('falta unir la factura', 'alerta') : null)),
+          h('li', {}, h('span', {}, 'Costo total'), h('strong', {}, e.costoTotalUSD !== null ? usd(e.costoTotalUSD) : '—')),
+          h('li', {}, h('span', {}, 'Venta'), h('span', {}, a.precioVenta ? dinero(a.precioVenta, a.moneda) : '—', a.cliente ? h('small', {}, ` · ${a.cliente}`) : null)),
+          a.anticipo ? h('li', {}, h('span', {}, 'Anticipo'), h('span', {}, dinero(a.anticipo, a.moneda), h('small', {}, a.anticipoPone === 'yo' ? ' · lo pusiste tú' : ' · lo pagó el cliente'))) : null,
+          h('li', {}, h('span', {}, 'Cobrado / falta'), h('span', {}, dinero(e.cobrado, a.moneda), ' / ', e.faltaCobrar !== null ? dinero(e.faltaCobrar, a.moneda) : '—')),
+          h('li', {}, h('span', {}, 'Ganancia'), h('strong', { class: e.gananciaUSD < 0 ? 'negativo' : '' }, e.gananciaUSD !== null ? `${usd(e.gananciaUSD)}${e.pctGanancia !== null ? ` (${pct(e.pctGanancia)})` : ''}` : '—'))),
+        h('div', { class: 'fila-detalle' }, etiqueta(e.vendido ? 'vendido' : a.estado || 'en stock', e.vendido ? 'ok' : ''), a.ambito ? etiqueta(a.ambito) : null, e.vendido && a.fechaVenta ? etiqueta(`ganancia en ingresos de ${a.fechaVenta.slice(0, 7)}`, 'ok') : null),
+        h('div', { class: 'botones' }, h('button', { class: 'boton pequeno', onclick: () => abrirFormulario('articulos', a) }, 'Editar')));
+    })) : vacio('Aún no hay artículos para revender.'),
+  );
+}
+
 const VISTAS = {
   resumen: ['Resumen', vistaResumen],
   movimientos: ['Movimientos', vistaMovimientos],
   facturas: ['Facturas', vistaFacturas],
   fijos: ['Gastos fijos', vistaFijos],
-  presupuesto: ['Presupuesto 50-30-20', vistaPresupuesto],
+  presupuesto: ['Presupuesto 20-30-30-20', vistaPresupuesto],
+  hormigas: ['Gastos hormiga', vistaHormigas],
+  negocio: ['Gastos de negocio', vistaNegocio],
+  reventa: ['Compra y venta', vistaReventa],
   personal: ['Personal (antiguo)', vistaPersonal],
   ahorro: ['Ahorro', vistaAhorro],
   metas: ['Metas', vistaMetas],
@@ -1211,7 +1465,8 @@ const VISTAS = {
 function grupos() {
   return [
     { id: 'resumen', t: 'Resumen', vistas: ['resumen'] },
-    { id: 'diario', t: 'Día a día', vistas: ['movimientos', 'facturas', 'fijos', 'presupuesto', ...(M.vivos(estado.personales).length ? ['personal'] : [])] },
+    { id: 'diario', t: 'Día a día', vistas: ['movimientos', 'hormigas', 'facturas', 'fijos', 'presupuesto', ...(M.vivos(estado.personales).length ? ['personal'] : [])] },
+    { id: 'negocio', t: 'Negocio', vistas: ['negocio', 'reventa'] },
     { id: 'ahorro', t: 'Ahorro y patrimonio', vistas: ['ahorro', 'metas', 'deudas', 'inversiones', 'patrimonio', 'historial'] },
     { id: 'cambio', t: 'Cambio y envíos', vistas: ['p2p', 'tasas', 'panavana'] },
     { id: 'datos', t: 'Datos', vistas: ['datos'] },

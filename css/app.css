@@ -237,3 +237,20 @@ input[type="month"] { min-height: 44px; }
 .codigo-recuperacion { font-family: ui-monospace, Consolas, monospace; font-size: 1.25rem; letter-spacing: .06em; text-align: center; background: var(--fondo, #f3f6f4); border: 1px dashed var(--borde); border-radius: 8px; padding: 12px; user-select: all; overflow-wrap: anywhere; }
 .navegacion[hidden] { display: none; }
 @media (min-width: 900px) { .navegacion[hidden] + .vista { grid-column: 1 / -1; width: 100%; } }
+
+/* Reparto de un ingreso y desglose de gastos (18 nov 2026) */
+.reparto { display: grid; gap: 6px; }
+.reparto-fila { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, .9fr) minmax(0, .6fr) auto; gap: 4px; align-items: center; }
+.reparto-fila [hidden] { display: none; }
+.reparto-fila input, .reparto-fila select { min-height: 40px; width: 100%; min-width: 0; }
+@media (max-width: 560px) {
+  .reparto-fila { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; padding-bottom: 6px; border-bottom: 1px dashed var(--borde); }
+  .reparto-fila > select:first-child, .reparto-fila > input[type=text], .reparto-fila > select + select { grid-column: 1 / -1; }
+}
+.dialogo .formulario { min-width: 0; overflow-wrap: anywhere; }
+.campo[hidden] { display: none; }
+details.desglose { border-top: 1px solid var(--borde); padding: 6px 0; }
+details.desglose summary { display: flex; justify-content: space-between; gap: 8px; cursor: pointer; font-weight: 600; }
+.desglose-cat { display: block !important; }
+.desglose-sub { list-style: none; margin: 2px 0 6px 12px; padding: 0; color: var(--suave); font-size: .9rem; }
+.desglose-sub li { display: flex; justify-content: space-between; gap: 8px; }
