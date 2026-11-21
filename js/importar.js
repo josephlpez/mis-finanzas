@@ -232,6 +232,22 @@ export function desdeNovedades(nov, actual) {
       dup = n <= iguales;
     }
     if (dup) { omitidos.push(desc); continue; }
+    // Salida de CUP que pagó una compra P2P: Muse indica el vendedor y la fecha; se une a esa compra.
+    let p2p = null;
+    if (m.p2pDe && tipo === 'salida') {
+      const compra = existentes.find((x) => Number(x.cupPagados) > 0 && x.fecha === m.p2pDe.fecha && norm(x.vendedor) === norm(m.p2pDe.vendedor));
+      if (!compra) {
+        avisos.push(`No encontré la compra P2P de ${m.p2pDe.vendedor} del ${m.p2pDe.fecha}: «${desc}» se apunta sin unir.`);
+      } else {
+        const yaPagado = [...existentes, ...e.movimientos].filter((x) => x.p2p === compra.id).reduce((s, x) => s + Number(x.monto || 0), 0);
+        if (yaPagado + monto > Number(compra.cupPagados) + 0.5) {
+          avisos.push(`La compra P2P de ${m.p2pDe.vendedor} del ${m.p2pDe.fecha} ya tiene registrados los CUP que la pagaron: no se repite «${desc}».`);
+          omitidos.push(desc);
+          continue;
+        }
+        p2p = compra.id;
+      }
+    }
     let tasa = Number(m.tasa) > 0 ? Number(m.tasa) : null;
     let nota = String(m.nota || '');
     if (!tasa && moneda !== 'USD' && moneda !== 'USDT') {
@@ -260,6 +276,7 @@ export function desdeNovedades(nov, actual) {
       montoBruto: m.montoBruto ?? null,
       cupPagados: m.cupPagados ?? null,
       vendedor: m.vendedor || null,
+      p2p,
       referencia: m.referencia ? String(m.referencia) : null,
       fuente: m.fuente || `Muse (${String(nov.creado || '').slice(0, 16)})`,
       verificado: false,
