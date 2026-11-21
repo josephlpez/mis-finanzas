@@ -217,15 +217,21 @@ export function desdeNovedades(nov, actual) {
     if (!(monto >= 0) || !/^\d{4}-\d{2}-\d{2}$/.test(m.fecha || '')) { avisos.push(`Movimiento sin fecha o importe válido: «${desc}».`); continue; }
     const tipo = /entrada|ingreso/i.test(m.tipo) ? 'entrada' : 'salida';
     const moneda = m.moneda || cuenta.moneda;
-    // ¿Ya está? (misma referencia, o misma cuenta, fecha, hora, tipo, importe y descripción)
-    const dup = existentes.find((x) => x.cuenta === cuenta.id && ((m.referencia && x.referencia === String(m.referencia)) ||
-      (x.fecha === m.fecha && (x.hora || null) === (m.hora || null) && x.tipo === tipo && Number(x.monto) === monto && norm(x.descripcion) === norm(desc))));
-    // También dentro del mismo archivo: una referencia repetida es el mismo movimiento.
-    const dupLote = m.referencia && e.movimientos.some((x) => x.cuenta === cuenta.id && x.referencia === String(m.referencia));
-    if (dup || dupLote) { omitidos.push(desc); continue; }
+    // ¿Ya está? Con referencia: la misma referencia es el mismo movimiento (también dentro del archivo).
+    // Sin referencia: dos cargos idénticos el mismo día pueden ser reales (dos compras iguales en Temu), así que
+    // se cuentan: el 2.º igual del archivo solo se omite si en la app ya hay 2 iguales.
     const clave = m.referencia ? `${cuenta.id}|${m.referencia}` : `${cuenta.id}|${m.fecha}|${m.hora}|${tipo}|${monto}|${moneda}|${norm(desc)}`;
     const n = (vistos.get(clave) || 0) + 1;
     vistos.set(clave, n);
+    let dup;
+    if (m.referencia) {
+      dup = n > 1 || existentes.some((x) => x.cuenta === cuenta.id && x.referencia === String(m.referencia));
+    } else {
+      const iguales = existentes.filter((x) => x.cuenta === cuenta.id && x.fecha === m.fecha && (x.hora || null) === (m.hora || null) &&
+        x.tipo === tipo && Number(x.monto) === monto && norm(x.descripcion) === norm(desc)).length;
+      dup = n <= iguales;
+    }
+    if (dup) { omitidos.push(desc); continue; }
     let tasa = Number(m.tasa) > 0 ? Number(m.tasa) : null;
     let nota = String(m.nota || '');
     if (!tasa && moneda !== 'USD' && moneda !== 'USDT') {
