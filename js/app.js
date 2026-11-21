@@ -155,6 +155,8 @@ async function borrarRegistro(coleccion, id) {
  * - Gasto hormiga en efectivo o transferencia → movimiento de salida «hm-<id>».
  * - Gasto hormiga a crédito → deuda «hd-<id>» en Deudas.
  * - Gasto de negocio → movimiento de salida «gn-<id>» (desarrollo de negocios).
+ * - Compra P2P con «cuenta de donde salieron los CUP» → salida de CUP «p2-<id>» en esa cuenta.
+ * - Compra y venta con cuentas → pago de la compra «rv-c-<id>», del envío «rv-e-<id>» y cobro «rv-v-<id>».
  * Devuelve un texto para el aviso o null.
  */
 async function sincronizarVinculados(coleccion, r) {
@@ -194,6 +196,40 @@ async function sincronizarVinculados(coleccion, r) {
       verificado: true, fuente: 'Gastos de negocio', nota: 'Se edita en Negocio → Gastos de negocio.',
     });
     return 'Apuntado también en Movimientos como gasto de desarrollo de negocios.';
+  }
+  if (coleccion === 'movimientos') {
+    if (String(r.id).startsWith('p2-')) return null; // la propia salida creada sola
+    const idMov = `p2-${r.id}`;
+    const otra = M.vivos(estado.movimientos).some((m) => m.p2p === r.id && m.id !== idMov); // ya registrada a mano
+    if (r.borrado || r.tipo !== 'entrada' || !r.cuentaCup || !(Number(r.cupPagados) > 0) || otra) { await quitar('movimientos', idMov); return null; }
+    const previa = M.vivos(estado.movimientos).find((m) => m.id === idMov);
+    const tasa = previa && previa.fecha === r.fecha ? previa.tasa : M.tasaSugerida(estado, 'CUP', r.fecha)?.valor ?? null;
+    await guardarRegistro('movimientos', {
+      ...(previa || {}), id: idMov, fecha: r.fecha, hora: r.hora || null, cuenta: r.cuentaCup, tipo: 'salida', monto: Number(r.cupPagados), moneda: 'CUP', tasa,
+      interno: true, p2p: r.id, descripcion: `CUP para P2P ${r.vendedor || ''}`.trim(), categoria: 'Cambio de moneda',
+      verificado: true, fuente: 'Compra P2P', nota: 'Se creó sola desde la compra P2P: se edita en esa compra.',
+    });
+    return 'La salida de CUP se apuntó sola en su cuenta.';
+  }
+  if (coleccion === 'articulos') {
+    const vinc = [
+      { id: `rv-c-${r.id}`, cuenta: r.cuentaCompra, ok: !r.movimientoCompra && Number(r.costo) > 0, tipo: 'salida', monto: Number(r.costo), moneda: r.moneda, fecha: r.fechaCompra, desc: `Compra para revender: ${r.nombre}` },
+      { id: `rv-e-${r.id}`, cuenta: r.cuentaEnvio, ok: Number(r.costoEnvio) > 0, tipo: 'salida', monto: Number(r.costoEnvio), moneda: 'USD', fecha: r.fechaCompra, desc: `Envío Panavana: ${r.nombre}` },
+      { id: `rv-v-${r.id}`, cuenta: r.cuentaVenta, ok: !r.movimientoVenta, tipo: 'entrada', monto: M.estadoArticulo(estado, r).cobrado, moneda: r.moneda, fecha: r.fechaVenta || r.fechaCompra, desc: `Cobro de la venta: ${r.nombre}${r.cliente ? ` (${r.cliente})` : ''}` },
+    ];
+    const hechos = [];
+    for (const v of vinc) {
+      if (r.borrado || !v.cuenta || !v.ok || !(v.monto > 0)) { await quitar('movimientos', v.id); continue; }
+      const previa = M.vivos(estado.movimientos).find((m) => m.id === v.id);
+      const tasa = previa && previa.fecha === v.fecha && previa.moneda === v.moneda ? previa.tasa : (v.moneda === 'USD' || v.moneda === 'USDT' ? null : M.tasaSugerida(estado, v.moneda, v.fecha)?.valor ?? null);
+      await guardarRegistro('movimientos', {
+        ...(previa || {}), id: v.id, fecha: v.fecha, cuenta: v.cuenta, tipo: v.tipo, monto: v.monto, moneda: v.moneda, tasa,
+        descripcion: v.desc, categoria: 'Compra y venta', ambito: r.ambito || null, verificado: true, fuente: 'Compra y venta',
+        nota: 'Se creó sola desde Compra y venta: se edita allí.',
+      });
+      hechos.push(v.tipo === 'entrada' ? 'el cobro' : v.id.startsWith('rv-e-') ? 'el envío' : 'el pago');
+    }
+    return hechos.length ? `Apuntado también en Movimientos: ${hechos.join(', ')}.` : null;
   }
   return null;
 }
@@ -493,6 +529,7 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
       form.querySelector('[data-campo="reparto"]').hidden = !entrada;
       form.querySelector('[data-campo="tipo503020"]').hidden = entrada;
       form.querySelector('[data-campo="p2p"]').hidden = entrada;
+      form.querySelector('[data-campo="cuentaCup"]').hidden = !entrada;
     };
     form.elements.tipo.addEventListener('change', mostrar);
     mostrar();
@@ -510,6 +547,7 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
       await borrarRegistro(coleccion, registro.id);
       await sincronizarVinculados(coleccion, { id: registro.id, borrado: true });
       dlg.close();
+      pintar();
       aviso('Borrado.');
     } }, 'Borrar') : null,
     h('span', { class: 'espacio' }),
@@ -529,12 +567,13 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
       return;
     }
     if (coleccion === 'movimientos') {
-      if (nuevos.tipo === 'entrada') { nuevos.tipo503020 = null; nuevos.p2p = null; } else nuevos.reparto = null;
+      if (nuevos.tipo === 'entrada') { nuevos.tipo503020 = null; nuevos.p2p = null; } else { nuevos.reparto = null; nuevos.cuentaCup = null; }
     }
     if (notaTasa && Number(nuevos.tasa) > 0 && 'nota' in nuevos && !/aproximada/i.test(nuevos.nota || '')) nuevos.nota = [nuevos.nota, notaTasa].filter(Boolean).join(' ');
     const guardado = await guardarRegistro(coleccion, { ...nuevos, id: registro ? registro.id : datos.id || uid() });
     const extra = await sincronizarVinculados(coleccion, guardado);
     dlg.close();
+    pintar(); // al momento: el Resumen y las listas reflejan lo guardado sin esperar a nada
     aviso(extra ? `Guardado. ${extra}` : 'Guardado.');
   });
 
@@ -645,7 +684,10 @@ function vistaResumen() {
       tarjeta('Saldos',
         h('ul', { class: 'lista-simple' }, s.map((x) => h('li', {},
           h('span', {}, x.cuenta.nombre, ahorroAl.alerta && ahorroAl.cuentas.some((c) => c.id === x.cuenta.id) ? etiqueta('por debajo del ahorro', 'alerta') : null),
-          h('span', {}, x.monedas.map((mo, i) => [i ? h('br', {}) : null, dinero(mo.saldo, mo.moneda)]), h('small', {}, x.usd !== null ? ` ≈ ${usd(x.usd)}` : ' · sin tasa'))))),
+          // Cada moneda con su propio valor en $; si la cuenta tiene varias, el total de la cuenta va aparte.
+          h('span', {}, x.monedas.map((mo, i) => [i ? h('br', {}) : null, dinero(mo.saldo, mo.moneda),
+            mo.moneda === 'USD' ? null : h('small', {}, mo.usd !== null ? ` ≈ ${usd(mo.usd)}` : ' · sin tasa')]),
+          x.monedas.length > 1 ? [h('br', {}), h('small', {}, `Total de la cuenta ≈ ${x.usd !== null ? usd(x.usd) : '—'}`)] : null)))),
         ahorroAl.apartado > 0 ? explicacion(`Apartado para ahorro y metas: ${usd(ahorroAl.apartado)} (debe quedar en ${ahorroAl.cuentas.map((c) => c.nombre).join(' + ') || 'la cuenta de ahorro'}).`) : null,
       ),
       tarjetaEnQueSeVa(pres, hoyF.slice(0, 7)),

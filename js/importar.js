@@ -264,7 +264,8 @@ export function desdeNovedades(nov, actual) {
   for (const f of Array.isArray(nov.facturas) ? nov.facturas : []) {
     if (!f.proveedor || !/^\d{4}-\d{2}-\d{2}$/.test(f.fecha || '')) { avisos.push(`Factura sin proveedor o fecha: ${JSON.stringify(f).slice(0, 80)}`); continue; }
     const id = f.archivoDrive ? `fac-drive-${String(f.archivoDrive).replace(/[^A-Za-z0-9_-]/g, '')}` : `fac-${huella(`${norm(f.proveedor)}|${f.numero}|${f.fecha}`)}`;
-    const ligado = f.referenciaMovimiento ? [...existentes, ...e.movimientos].find((x) => x.referencia === String(f.referenciaMovimiento)) : null;
+    // Jose une cada factura a su gasto a mano (petición del 18 nov): aquí NO se enlaza sola, solo se anota la pista.
+    const pista = f.referenciaMovimiento ? ` Referencia del cargo según Muse: ${f.referenciaMovimiento}.` : '';
     if (f.base === null || f.base === undefined) avisos.push(`Factura de ${f.proveedor} (${f.fecha}) sin importe: complétala en la app.`);
     e.facturas.push(base({
       id,
@@ -276,10 +277,10 @@ export function desdeNovedades(nov, actual) {
       moneda: f.moneda || 'USD',
       numero: f.numero || '',
       enlace: f.archivoDrive ? `https://drive.google.com/file/d/${encodeURIComponent(f.archivoDrive)}/view` : f.enlace || null,
-      movimiento: ligado ? ligado.id : null,
+      movimiento: null,
       ambito: f.ambito === 'negocio' ? 'empresa' : f.ambito || null,
       verificado: false,
-      nota: f.nota || 'Añadida desde las novedades de Muse. Revisa importes y vincúlala a su cargo.',
+      nota: (f.nota || 'Añadida desde las novedades de Muse. Revisa importes y vincúlala a su cargo.') + pista,
     }));
   }
 
@@ -303,7 +304,31 @@ export function desdeNovedades(nov, actual) {
 }
 
 /** Lee un texto JSON y lo convierte en estado de la app, sea una copia de la app o un informe de Muse. */
+/**
+ * Lo que llega de Muse (informe, novedades, facturas de Drive) solo AÑADE registros nuevos: nunca cambia uno que
+ * ya está en la app (Jose puede haberlo corregido) ni resucita uno que Jose borró. Solo los gastos fijos se
+ * actualizan, porque Muse avisa justo de eso (próxima fecha, importe, estado).
+ */
+function soloNuevos(r, actual) {
+  if (!actual || r.tipo === 'copia') return r;
+  const estadoN = { ...r.estado };
+  let ignorados = 0;
+  for (const c of COLECCIONES) {
+    if (c === 'suscripciones' || !Array.isArray(estadoN[c])) continue;
+    const ya = new Set((actual[c] || []).map((x) => x.id));
+    const antes = estadoN[c].length;
+    estadoN[c] = estadoN[c].filter((x) => !ya.has(x.id));
+    ignorados += antes - estadoN[c].length;
+  }
+  const avisos = ignorados ? [...r.avisos, `${ignorados} registros ya estaban en la app: se dejan como los tienes (con tus correcciones).`] : r.avisos;
+  return { ...r, estado: estadoN, avisos };
+}
+
 export function importarTexto(texto, actual = null) {
+  return soloNuevos(leerImportacion(texto, actual), actual);
+}
+
+function leerImportacion(texto, actual) {
   if (typeof texto !== 'string' || texto.length > MAX_BYTES_IMPORTACION) throw new Error('El archivo es demasiado grande o está vacío.');
   let obj;
   try {
@@ -318,7 +343,8 @@ export function importarTexto(texto, actual = null) {
   }
   // Facturas nuevas que deja la tarea automática de Drive: solo facturas, solo se añaden.
   if (obj && obj.app === 'finanzas-jose' && obj.tipo === 'facturas-drive' && obj.datos) {
-    const estado = validarEstado({ version: 1, facturas: obj.datos.facturas || [] });
+    // Sin enlazar: Jose une cada factura a su gasto a mano.
+    const estado = validarEstado({ version: 1, facturas: (obj.datos.facturas || []).map((f) => ({ ...f, movimiento: null })) });
     const avisos = estado.facturas.filter((f) => f.base === null).map((f) => `${f.proveedor || 'Factura'} (${f.fecha || 'sin fecha'}): falta el importe; complétalo en la app.`);
     return { estado, avisos, tipo: 'facturas' };
   }

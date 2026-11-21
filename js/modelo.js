@@ -63,6 +63,7 @@ export const CAMPOS = {
     { k: 'montoBruto', l: 'P2P: $ comprados (bruto, antes de comisión)', t: 'number', min: 0 },
     { k: 'cupPagados', l: 'P2P: CUP pagados', t: 'number', min: 0 },
     { k: 'vendedor', l: 'P2P: vendedor', t: 'text' },
+    { k: 'cuentaCup', l: 'P2P: cuenta de donde salieron los CUP', t: 'cuenta', ayuda: 'Si la eliges, la salida de CUP se apunta sola en esa cuenta (y baja su saldo).' },
     { k: 'referencia', l: 'Referencia de la operación (banco o app)', t: 'text' },
     { k: 'fuente', l: 'Fuente del dato', t: 'text' },
     { k: 'verificado', l: 'Verificado', t: 'checkbox' },
@@ -194,11 +195,13 @@ export const CAMPOS = {
     { k: 'tienda', l: 'Dónde se compró (tienda o proveedor)', t: 'text' },
     { k: 'costo', l: 'Costo de compra', t: 'number', req: true, min: 0 },
     { k: 'moneda', l: 'Moneda', t: 'select', op: MONEDAS, req: true },
+    { k: 'cuentaCompra', l: 'Pagado desde (cuenta)', t: 'cuenta', ayuda: 'Si la eliges, el pago de la compra se apunta solo en esa cuenta.' },
     { k: 'movimientoCompra', l: 'Pago de la compra (movimiento de salida)', t: 'movimiento' },
     { k: 'peso', l: 'Peso (libras) que indica el taquillero de Panavana', t: 'number', min: 0 },
     { k: 'costoEnvio', l: 'Costo del envío que indica Panavana ($)', t: 'number', min: 0 },
     { k: 'montoFacturaPanavana', l: 'Monto final de la factura de Panavana ($)', t: 'number', min: 0, ayuda: 'Debe coincidir con la factura de Panavana registrada en Facturas cuando llegue.' },
     { k: 'facturaPanavana', l: 'Factura de Panavana registrada', t: 'factura' },
+    { k: 'cuentaEnvio', l: 'Envío pagado desde (cuenta)', t: 'cuenta', ayuda: 'Si la eliges, el pago del envío ($) se apunta solo en esa cuenta.' },
     { k: 'cliente', l: 'Cliente', t: 'text' },
     { k: 'precioVenta', l: 'Precio de venta (total)', t: 'number', min: 0 },
     { k: 'anticipo', l: 'Anticipo', t: 'number', min: 0 },
@@ -206,6 +209,7 @@ export const CAMPOS = {
     { k: 'cobrado', l: 'Cobrado al cliente además del anticipo', t: 'number', min: 0 },
     { k: 'fechaVenta', l: 'Fecha de venta', t: 'date' },
     { k: 'estado', l: 'Estado', t: 'select', op: ['en stock', 'vendido', 'parcialmente vendido'] },
+    { k: 'cuentaVenta', l: 'Cobrado en (cuenta)', t: 'cuenta', ayuda: 'Si la eliges, lo cobrado (anticipo del cliente + resto) entra solo en esa cuenta.' },
     { k: 'movimientoVenta', l: 'Cobro de la venta (movimiento de entrada)', t: 'entrada' },
     { k: 'ambito', l: 'Ámbito', t: 'select', op: AMBITOS },
     { k: 'nota', l: 'Nota', t: 'textarea' },
@@ -430,6 +434,8 @@ function idsReventa(estado) {
     if (a.movimientoCompra) s.add(a.movimientoCompra);
     if (a.movimientoVenta) s.add(a.movimientoVenta);
   }
+  // Los que crea la app desde Compra y venta (rv-c-, rv-e-, rv-v-): mueven el saldo, pero la ganancia ya cuenta aparte.
+  for (const m of vivos(estado.movimientos)) if (String(m.id).startsWith('rv-')) s.add(m.id);
   return s;
 }
 
@@ -444,6 +450,11 @@ export function mes(estado, mesTxt) {
     porCategoria: {}, detalle: {}, porDestino: {}, sinConvertir: 0, sinClasificar: [],
   };
   const reventa = idsReventa(estado);
+  // Triple de Bancus sin marcar: se ignora la pareja retención/liberación y cuenta solo el pago oficial,
+  // aunque esté marcado como interno (así el gasto no desaparece mientras Jose no pulse el botón).
+  const ignorar = new Set();
+  const forzar = new Set();
+  for (const t of triplesBancus(estado)) { t.retencion.forEach((x) => ignorar.add(x.id)); forzar.add(t.oficial.id); }
   const sumarDetalle = (tipo, cat, sub, usd) => {
     r.detalle[tipo] ||= {};
     r.detalle[tipo][cat] ||= { total: 0, sub: {} };
@@ -451,7 +462,8 @@ export function mes(estado, mesTxt) {
     if (sub) r.detalle[tipo][cat].sub[sub] = (r.detalle[tipo][cat].sub[sub] || 0) + usd;
   };
   for (const m of vivos(estado.movimientos)) {
-    if (!cuentaEnMes(m) || String(m.fecha).slice(0, 7) !== mesTxt || reventa.has(m.id)) continue;
+    if (ignorar.has(m.id)) continue;
+    if (!(cuentaEnMes(m) || (forzar.has(m.id) && !m.retencion)) || String(m.fecha).slice(0, 7) !== mesTxt || reventa.has(m.id)) continue;
     if (String(m.deuda || '').startsWith('hd-')) continue; // pago de un gasto hormiga a crédito: ya contó al hacerlo
     const usd = usdMovimiento(m);
     if (usd === null) { r.sinConvertir++; continue; }
