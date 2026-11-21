@@ -354,6 +354,12 @@ export function saldos(estado) {
   });
 }
 
+/** Movimientos cuya cuenta no existe (borrada o desconocida): no suman en ningún saldo, así que se avisa. */
+export function movimientosSinCuenta(estado) {
+  const ids = new Set(vivos(estado.cuentas).map((c) => c.id));
+  return vivos(estado.movimientos).filter((m) => !ids.has(m.cuenta));
+}
+
 export const totalCuentasUSD = (estado) => redondear(saldos(estado).reduce((a, x) => a + (x.usd || 0), 0));
 
 // --- Suscripciones y gastos fijos ----------------------------------------------------------
@@ -626,8 +632,10 @@ export function estadoDeuda(estado, d) {
   for (const p of pagos) {
     if (p.moneda === d.moneda) pagadoApp += Number(p.monto);
     else {
+      // Pago en otra moneda: se pasa a dólares con su tasa congelada y de ahí a la moneda de la deuda con la tasa de ese día.
       const usd = usdMovimiento(p);
-      const enMoneda = usd === null ? null : d.moneda === 'USD' || d.moneda === 'USDT' ? usd : null;
+      const t = TABLA_DE[d.moneda] ? tasaPara(estado[TABLA_DE[d.moneda]], p.fecha) : null;
+      const enMoneda = usd === null ? null : d.moneda === 'USD' || d.moneda === 'USDT' ? usd : t ? redondear(usd * t.valor) : null;
       if (enMoneda === null) sinConvertir++;
       else pagadoApp += enMoneda;
     }

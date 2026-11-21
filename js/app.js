@@ -543,6 +543,10 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
   const borrable = registro && coleccion !== 'ajustes';
   form.append(h('div', { class: 'botones' },
     borrable ? h('button', { type: 'button', class: 'boton peligro', onclick: async () => {
+      if (coleccion === 'cuentas') {
+        const n = M.vivos(estado.movimientos).filter((m) => m.cuenta === registro.id).length;
+        if (n) { alert(`Esta cuenta tiene ${n} movimientos. Si la borras, su dinero dejaría de contar en tus saldos. Pásalos a otra cuenta o bórralos primero.`); return; }
+      }
       if (!confirm('¿Borrar este registro? Se borrará también en el archivo del PC.')) return;
       await borrarRegistro(coleccion, registro.id);
       await sincronizarVinculados(coleccion, { id: registro.id, borrado: true });
@@ -568,6 +572,14 @@ function abrirFormulario(coleccion, registro = null, valoresIniciales = {}) {
     }
     if (coleccion === 'movimientos') {
       if (nuevos.tipo === 'entrada') { nuevos.tipo503020 = null; nuevos.p2p = null; } else { nuevos.reparto = null; nuevos.cuentaCup = null; }
+    }
+    if (coleccion === 'movimientos' && nuevos.cuenta && nuevos.moneda) {
+      const c = cuentaPorId(nuevos.cuenta);
+      const yaTiene = M.vivos(estado.movimientos).some((m) => m.cuenta === nuevos.cuenta && m.moneda === nuevos.moneda && m.id !== registro?.id);
+      if (c && c.moneda !== nuevos.moneda && !yaTiene &&
+        !confirm(`La cuenta «${c.nombre}» es en ${c.moneda} y este movimiento va en ${nuevos.moneda}. Se guardará como dinero en ${nuevos.moneda} dentro de esa cuenta: el saldo en ${c.moneda} no cambiará. Si el banco te lo cobró en ${c.moneda}, pulsa Cancelar y apúntalo en ${c.moneda}.
+
+¿Guardarlo en ${nuevos.moneda}?`)) return;
     }
     if (notaTasa && Number(nuevos.tasa) > 0 && 'nota' in nuevos && !/aproximada/i.test(nuevos.nota || '')) nuevos.nota = [nuevos.nota, notaTasa].filter(Boolean).join(' ');
     const guardado = await guardarRegistro(coleccion, { ...nuevos, id: registro ? registro.id : datos.id || uid() });
@@ -667,9 +679,13 @@ function vistaResumen() {
   const metas = M.vivos(estado.metas).filter((m) => m.estado !== 'cumplida').slice(0, 4);
   const facturasRevisar = M.vivos(estado.facturas).map((f) => ({ f, c: M.conciliacion(estado, f) })).filter(({ c }) => c.revisar);
   const ahorroAl = M.alertaAhorro(estado);
+  const huerfanos = M.movimientosSinCuenta(estado);
 
   return h('div', {},
     cabecera('Resumen', h('button', { class: 'boton primario', onclick: () => nuevoMovimiento() }, '+ Movimiento')),
+    huerfanos.length ? h('div', { class: 'banda peligro', role: 'alert' }, h('strong', {}, `${huerfanos.length} movimientos no están en ninguna cuenta. `),
+      'Su cuenta se borró o no existe, así que no suman en tus saldos. Ábrelos en Movimientos y elige su cuenta: ',
+      huerfanos.slice(0, 5).map((m) => `${m.fecha} ${m.descripcion}`).join(' · ')) : null,
     ahorroAl.alerta ? h('div', { class: 'banda peligro', role: 'alert' }, h('strong', {}, `Estás gastando dinero de tu ahorro. `),
       `En ${ahorroAl.cuentas.map((c) => c.nombre).join(' + ')} hay ${usd(ahorroAl.saldo)}, pero tendrías que tener ${usd(ahorroAl.apartado)} guardados para ahorro y metas. Te has pasado en ${usd(ahorroAl.falta)}.`) : null,
     alerta.falta > 0 ? h('div', { class: 'banda peligro', role: 'alert' }, h('strong', {}, 'Saldo insuficiente para los próximos cobros. '), `En los próximos 30 días se cobran ${usd(alerta.necesario)} y hay ${usd(alerta.disponible)}. Faltan ${usd(alerta.falta)}.`) : null,
